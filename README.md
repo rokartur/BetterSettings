@@ -67,10 +67,15 @@ let configuration = SettingsConfiguration(
     }
 )
 
-// 3. Show it.
-let controller = SettingsWindowController(configuration: configuration)
-controller.show(selecting: "general")
+// 3. Show it. `SettingsPresenter` owns the window lifecycle — lazy creation,
+//    bring-to-front activation, free-on-close (reclaims RAM), and robust reopen.
+//    Hold one and call show() repeatedly; it always surfaces a live window.
+let presenter = SettingsPresenter { configuration }
+presenter.show(selecting: "general")
 ```
+
+For full control you can drive `SettingsWindowController` directly instead, but
+then you own the create/teardown/reopen lifecycle.
 
 Strings (`title`, `tabTitle`, `sectionTitle`, `keywords`, `searchPlaceholder`,
 `showDetailsLabel`, `noResultsText`) are expected pre-localized by the host app.

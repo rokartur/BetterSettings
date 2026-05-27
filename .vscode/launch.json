@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:BetterSettings}",
+            "name": "Debug better-settings-demo",
+            "target": "better-settings-demo",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug better-settings-demo"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:BetterSettings}",
+            "name": "Release better-settings-demo",
+            "target": "better-settings-demo",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release better-settings-demo"
+        }
+    ]
+}
