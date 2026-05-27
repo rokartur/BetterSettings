@@ -49,7 +49,10 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         fatalError("init(coder:) is not supported")
     }
 
-    /// Shows the window, optionally selecting a tab, and brings the app forward.
+    /// Shows the window, optionally selecting a tab, and brings the app forward
+    /// as the active app with the window key — immediately, even for accessory
+    /// (menu-bar) apps where the activation-policy transition can otherwise leave
+    /// the window non-key on the first runloop pass.
     public func show(selecting tabID: String? = nil) {
         if let tabID, configuration.tab(for: tabID) != nil {
             splitVC.selectTab(tabID)
@@ -57,8 +60,21 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         guard let window else { return }
 
         if !window.isVisible { window.center() }
-        window.makeKeyAndOrderFront(nil)
+
+        // Activate the app first, then key the window. `orderFrontRegardless`
+        // surfaces it even while another app is frontmost.
         NSApp.activate(ignoringOtherApps: true)
+        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(nil)
+
+        // Retry next tick: an accessory app may still be mid activation-policy
+        // transition and not yet hold key status.
+        DispatchQueue.main.async { [weak window] in
+            guard let window, window.isVisible else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+        }
     }
 
     /// Tears down child controllers and releases the window for memory.
