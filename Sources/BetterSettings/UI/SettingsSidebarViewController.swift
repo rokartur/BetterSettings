@@ -43,6 +43,7 @@ final class SettingsSidebarViewController: NSViewController,
     }
 
     private static let cellID = NSUserInterfaceItemIdentifier("BetterSettingsSidebarCell")
+    private static let rowID = NSUserInterfaceItemIdentifier("BetterSettingsSidebarRow")
     private static let columnID = NSUserInterfaceItemIdentifier("BetterSettingsSidebarColumn")
 
     private let configuration: SettingsConfiguration
@@ -64,13 +65,21 @@ final class SettingsSidebarViewController: NSViewController,
     private var isProgrammaticSelection = false
 
     private var tabsByID: [String: SettingsTab] = [:]
+    // Tab icon set is fixed and immutable, but configure(cell:) runs on every
+    // scroll-recycle / reloadData / selection. Cache the rendered SF Symbol image
+    // and the bridged gradient NSColors per tab so they aren't rebuilt each time.
+    private var tabIconImageByID: [String: NSImage] = [:]
+    private var gradientColorsByID: [String: (start: NSColor, end: NSColor)] = [:]
 
     init(configuration: SettingsConfiguration, router: SettingsRouter) {
         self.configuration = configuration
         self.router = router
         self.searchIndex = SettingsSearchIndex(items: configuration.searchItems)
         super.init(nibName: nil, bundle: nil)
-        for tab in configuration.tabs { tabsByID[tab.id] = tab }
+        for tab in configuration.tabs {
+            tabsByID[tab.id] = tab
+            gradientColorsByID[tab.id] = (tab.iconStyle.gradientStart.nsColor, tab.iconStyle.gradientEnd.nsColor)
+        }
     }
 
     @available(*, unavailable)
@@ -92,7 +101,6 @@ final class SettingsSidebarViewController: NSViewController,
         setupSearchField()
         setupTableView()
         if configuration.showsDetailsToggle { setupDetailsToggle() } else { pinScrollViewBottomToView() }
-        installWindowActivityObservers()
         applySearch(query: "")
 
         routerSubscription = router.$selectedTabID
@@ -382,6 +390,8 @@ final class SettingsSidebarViewController: NSViewController,
         tableView.dataSource = nil
         searchField.delegate = nil
         rows.removeAll()
+        tabIconImageByID.removeAll()
+        gradientColorsByID.removeAll()
         scrollView.documentView = nil
         view.subviews.forEach { $0.removeFromSuperview() }
     }
@@ -389,16 +399,14 @@ final class SettingsSidebarViewController: NSViewController,
     // MARK: - Window activity (selection emphasis)
 
     private func installWindowActivityObservers() {
-        guard windowActivityObservers.isEmpty else { return }
+        // Scope to this window so foreign windows' key/resign transitions don't
+        // wake the observer. Installed from viewDidAppear, where the window exists.
+        guard windowActivityObservers.isEmpty, let window = view.window else { return }
         let names: [Notification.Name] = [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification]
         windowActivityObservers = names.map { name in
-            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
-                guard let observed = note.object as AnyObject? else { return }
-                let observedID = ObjectIdentifier(observed)
+            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    guard let self, let window = self.view.window,
-                          ObjectIdentifier(window) == observedID else { return }
-                    self.refreshVisibleRowStyles()
+                    self?.refreshVisibleRowStyles()
                 }
             }
         }
@@ -439,11 +447,7 @@ final class SettingsSidebarViewController: NSViewController,
     }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        let rowView = SidebarRowView(
-            maxContentWidth: Metrics.tabWidth,
-            leadingInset: Metrics.horizontalPadding,
-            trailingInset: Metrics.trailingPadding
-        )
+        let rowView = (tableView.makeView(withIdentifier: Self.rowID, owner: nil) as? SidebarRowView) ?? makeRowView()
         rowView.selectionEmphasized = isSelectionEmphasized
         return rowView
     }
@@ -481,16 +485,28 @@ final class SettingsSidebarViewController: NSViewController,
         return cell
     }
 
+    private func makeRowView() -> SidebarRowView {
+        let rowView = SidebarRowView(
+            maxContentWidth: Metrics.tabWidth,
+            leadingInset: Metrics.horizontalPadding,
+            trailingInset: Metrics.trailingPadding
+        )
+        rowView.identifier = Self.rowID
+        return rowView
+    }
+
     private func configure(cell: SidebarCellView, for row: Row) {
         switch row {
         case .tab(let id):
             guard let tab = tabsByID[id] else { return }
+            let gradient = gradientColorsByID[id]
+                ?? (tab.iconStyle.gradientStart.nsColor, tab.iconStyle.gradientEnd.nsColor)
             cell.configureAsTab(
                 title: tab.title,
                 iconImage: tabSymbolImage(for: tab),
                 iconScale: clampedIconSize(for: tab.iconStyle),
-                gradientStart: tab.iconStyle.gradientStart.nsColor,
-                gradientEnd: tab.iconStyle.gradientEnd.nsColor,
+                gradientStart: gradient.start,
+                gradientEnd: gradient.end,
                 isBeta: tab.isBeta
             )
         case .setting(let result):
@@ -509,6 +525,7 @@ final class SettingsSidebarViewController: NSViewController,
     }
 
     private func tabSymbolImage(for tab: SettingsTab) -> NSImage? {
+        if let cached = tabIconImageByID[tab.id] { return cached }
         let style = tab.iconStyle
         let pointSize = clampedIconSize(for: style)
         let sizeConfig = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
@@ -523,6 +540,7 @@ final class SettingsSidebarViewController: NSViewController,
         let image = NSImage(systemSymbolName: tab.icon, accessibilityDescription: tab.title)?
             .withSymbolConfiguration(config)
         image?.isTemplate = false
+        if let image { tabIconImageByID[tab.id] = image }
         return image
     }
 }

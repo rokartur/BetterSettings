@@ -17,8 +17,6 @@ import QuartzCore
 @MainActor
 public final class SettingsRowView: NSView {
 
-    private static let liveRows = NSHashTable<SettingsRowView>.weakObjects()
-
     private var titleLabel: NSTextField?
     private var rowStack: NSStackView?
     private var hasSubtitleText = false
@@ -51,13 +49,6 @@ public final class SettingsRowView: NSView {
     private static let subtitleHeightAnimationTiming = CAMediaTimingFunction(controlPoints: 0.22, 0.88, 0.32, 1.0)
     private static let subtitleHideAnimationTiming = CAMediaTimingFunction(controlPoints: 0.2, 0.84, 0.3, 1.0)
 
-    private struct ViewportVisibilityContext {
-        weak var layoutRoot: NSView?
-        weak var scrollView: NSScrollView?
-        weak var documentView: NSView?
-        let viewportRect: NSRect
-    }
-
     // MARK: - Init
 
     /// Creates a settings row.
@@ -76,7 +67,6 @@ public final class SettingsRowView: NSView {
         translatesAutoresizingMaskIntoConstraints = false
         setContentHuggingPriority(.defaultLow, for: .horizontal)
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        Self.liveRows.add(self)
         setupViews(icon: icon, title: title, subtitle: subtitle, accessory: accessory)
         bindShowDetailsPreference()
         updateSubtitleVisibility()
@@ -90,32 +80,6 @@ public final class SettingsRowView: NSView {
     deinit {
         pendingSubtitleLayoutResolutionTask?.cancel()
         NotificationCenter.default.removeObserver(self)
-    }
-
-    static func visibleSubtitleRowCount(under layoutRoot: NSView? = nil) -> Int {
-        let candidateRows = liveRows.allObjects.filter { row in
-            guard row.window != nil, row.hasSubtitleText else { return false }
-            guard SettingsDetailsAnimationCoordinator.shared.isViewInActiveTab(row) else { return false }
-            return layoutRoot == nil || row.layoutAnimationRoot() === layoutRoot
-        }
-
-        guard !candidateRows.isEmpty else { return 0 }
-
-        var visibilityContextByRoot: [ObjectIdentifier: ViewportVisibilityContext] = [:]
-
-        return candidateRows.reduce(into: 0) { count, row in
-            let rowLayoutRoot = row.layoutAnimationRoot()
-            let rootIdentifier = ObjectIdentifier(rowLayoutRoot)
-            let visibilityContext = visibilityContextByRoot[rootIdentifier]
-                ?? {
-                    let context = row.makeViewportVisibilityContext(layoutRoot: rowLayoutRoot)
-                    visibilityContextByRoot[rootIdentifier] = context
-                    return context
-                }()
-
-            guard row.isCurrentlyVisibleInViewport(using: visibilityContext) else { return }
-            count += 1
-        }
     }
 
     public override func layout() {
@@ -699,28 +663,25 @@ public final class SettingsRowView: NSView {
             layoutAnimationRoot().layoutSubtreeIfNeeded()
         }
 
-        let preferredContainerWidths: [CGFloat] = [
-            subtitleLabel.superview?.bounds.width ?? .zero,
-            subtitleLabel.superview?.frame.width ?? .zero,
-            titleLabel?.superview?.bounds.width ?? .zero,
-            titleLabel?.superview?.frame.width ?? .zero,
-            bounds.width,
-            frame.width
-        ]
+        // Widest resolved container width — max over candidates > 1, without
+        // allocating intermediate arrays/closures (this runs per row per layout).
+        var widest: CGFloat = 1
+        let superBoundsWidth = subtitleLabel.superview?.bounds.width ?? 0
+        if superBoundsWidth > widest { widest = superBoundsWidth }
+        let superFrameWidth = subtitleLabel.superview?.frame.width ?? 0
+        if superFrameWidth > widest { widest = superFrameWidth }
+        let titleSuperBoundsWidth = titleLabel?.superview?.bounds.width ?? 0
+        if titleSuperBoundsWidth > widest { widest = titleSuperBoundsWidth }
+        let titleSuperFrameWidth = titleLabel?.superview?.frame.width ?? 0
+        if titleSuperFrameWidth > widest { widest = titleSuperFrameWidth }
+        if bounds.width > widest { widest = bounds.width }
+        if frame.width > widest { widest = frame.width }
+        if widest > 1 { return widest }
 
-        if let widestContainerWidth = preferredContainerWidths.filter({ $0 > 1 }).max() {
-            return widestContainerWidth
-        }
-
-        let fallbackCandidateWidths: [CGFloat] = [
-            subtitleLabel.bounds.width,
-            subtitleLabel.frame.width,
-            subtitleLabel.preferredMaxLayoutWidth
-        ]
-
-        if let validWidth = fallbackCandidateWidths.first(where: { $0 > 1 }) {
-            return validWidth
-        }
+        // First valid fallback width, in priority order.
+        if subtitleLabel.bounds.width > 1 { return subtitleLabel.bounds.width }
+        if subtitleLabel.frame.width > 1 { return subtitleLabel.frame.width }
+        if subtitleLabel.preferredMaxLayoutWidth > 1 { return subtitleLabel.preferredMaxLayoutWidth }
 
         guard allowFallback else { return .zero }
         return max(subtitleLabel.preferredMaxLayoutWidth, Self.subtitleFallbackWidth)
@@ -1018,73 +979,6 @@ public final class SettingsRowView: NSView {
 
     private func layoutContainerIfNeeded() {
         layoutAnimationRoot().layoutSubtreeIfNeeded()
-    }
-
-    private func makeViewportVisibilityContext(layoutRoot: NSView) -> ViewportVisibilityContext {
-        if let scrollView = enclosingScrollView,
-           let documentView = scrollView.documentView {
-            var preparedRoots = Set<ObjectIdentifier>()
-            for root in [layoutRoot, scrollView, scrollView.contentView, documentView] {
-                let identifier = ObjectIdentifier(root)
-                guard preparedRoots.insert(identifier).inserted else { continue }
-                root.layoutSubtreeIfNeeded()
-            }
-
-            return ViewportVisibilityContext(
-                layoutRoot: layoutRoot,
-                scrollView: scrollView,
-                documentView: documentView,
-                viewportRect: scrollView.contentView.documentVisibleRect
-            )
-        }
-
-        layoutRoot.layoutSubtreeIfNeeded()
-
-        return ViewportVisibilityContext(
-            layoutRoot: layoutRoot,
-            scrollView: nil,
-            documentView: nil,
-            viewportRect: .zero
-        )
-    }
-
-    private func isCurrentlyVisibleInViewport(using context: ViewportVisibilityContext? = nil) -> Bool {
-        guard SettingsDetailsAnimationCoordinator.shared.isViewInActiveTab(self) else { return false }
-        guard window != nil else { return false }
-
-        var currentView: NSView? = self
-        while let view = currentView {
-            guard !view.isHidden, view.alphaValue > Self.subtitleAlphaEpsilon else { return false }
-            currentView = view.superview
-        }
-
-        let resolvedContext = context ?? makeViewportVisibilityContext(layoutRoot: layoutAnimationRoot())
-
-        guard let layoutRoot = resolvedContext.layoutRoot else {
-            return false
-        }
-
-        guard let documentView = resolvedContext.documentView else {
-            return !frame.isEmpty
-        }
-
-        let rowFrame = convert(bounds, to: documentView)
-        let viewportRect = resolvedContext.viewportRect
-        if !rowFrame.isEmpty, !viewportRect.isEmpty {
-            return rowFrame.intersects(viewportRect)
-        }
-
-        let immediatelyVisibleRect = visibleRect
-        if !immediatelyVisibleRect.isEmpty {
-            return true
-        }
-
-        guard !frame.isEmpty, !layoutRoot.bounds.isEmpty else { return false }
-        if viewportRect.isEmpty {
-            return true
-        }
-
-        return rowFrame.intersects(viewportRect)
     }
 
     private func invalidateLayoutAnimationRootCache() {

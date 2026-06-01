@@ -19,11 +19,6 @@ final class SettingsDetailsAnimationCoordinator {
         case layoutTransition
     }
 
-    enum ToggleAnimationStyle {
-        case full
-        case layoutPriority
-    }
-
     static let shared = SettingsDetailsAnimationCoordinator()
     static let subtitleFadeInDelay: TimeInterval = 0.05
     static let subtitleFadeInDuration: TimeInterval = 0.22
@@ -37,7 +32,6 @@ final class SettingsDetailsAnimationCoordinator {
     static let sectionCollapseTiming = CAMediaTimingFunction(controlPoints: 0.18, 0.96, 0.52, 1.0)
     static let toggleAnimationDuration: TimeInterval = max(sectionExpandDelay + sectionExpandDuration, sectionCollapseDelay + sectionCollapseDuration)
     static let toggleAnimationTiming = sectionExpandTiming
-    private static let layoutPriorityRowThreshold = 12
 
     static func layoutPhaseDelay(for shouldShowSubtitle: Bool) -> TimeInterval {
         shouldShowSubtitle ? sectionExpandDelay : sectionCollapseDelay
@@ -60,7 +54,6 @@ final class SettingsDetailsAnimationCoordinator {
     private var activeToggleGeneration: UInt = 0
     private var isAnimatingToggleFlag = false
     private var completions: [() -> Void] = []
-    private var toggleStyleByLayoutRoot: [ObjectIdentifier: ToggleAnimationStyle] = [:]
     private var pendingActiveTabPreparationTask: Task<Void, Never>?
 
     private init() {}
@@ -70,7 +63,6 @@ final class SettingsDetailsAnimationCoordinator {
         isAnimatingToggleFlag = true
         layoutRoots.removeAllObjects()
         completions.removeAll(keepingCapacity: true)
-        toggleStyleByLayoutRoot.removeAll(keepingCapacity: true)
         return activeToggleGeneration
     }
 
@@ -118,21 +110,6 @@ final class SettingsDetailsAnimationCoordinator {
         completions.append(completion)
     }
 
-    func toggleAnimationStyle(for layoutRoot: NSView, generation: UInt?) -> ToggleAnimationStyle {
-        guard isAnimatingToggle(generation: generation) else { return .full }
-        let rootIdentifier = ObjectIdentifier(layoutRoot)
-        if let cachedStyle = toggleStyleByLayoutRoot[rootIdentifier] {
-            return cachedStyle
-        }
-
-        let style: ToggleAnimationStyle =
-            SettingsRowView.visibleSubtitleRowCount(under: layoutRoot) > Self.layoutPriorityRowThreshold
-            ? .layoutPriority
-            : .full
-        toggleStyleByLayoutRoot[rootIdentifier] = style
-        return style
-    }
-
     func flushLayouts() {
         prepareActiveTabLayoutForAnimation()
         for root in layoutRoots.allObjects {
@@ -146,7 +123,6 @@ final class SettingsDetailsAnimationCoordinator {
         let completions = self.completions
         self.completions.removeAll(keepingCapacity: true)
         layoutRoots.removeAllObjects()
-        toggleStyleByLayoutRoot.removeAll(keepingCapacity: true)
         completions.forEach { $0() }
     }
 

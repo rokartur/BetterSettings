@@ -50,28 +50,35 @@ public struct SettingsSearchResult: Identifiable, Hashable, Sendable {
     public let item: SettingsSearchItem
     public let score: Int
 
+    /// Precomputed once at init. The subtitle is read for every visible result
+    /// cell on every reload/scroll-recycle; folding the strings here (instead of
+    /// in the computed getter) keeps that path allocation-free. Derived purely
+    /// from `item`, so it stays consistent with `Hashable`/`Equatable`.
+    private let precomputedTabAndSectionTitle: String
+
+    public init(item: SettingsSearchItem, score: Int) {
+        self.item = item
+        self.score = score
+        self.precomputedTabAndSectionTitle = Self.makeTabAndSectionTitle(for: item)
+    }
+
     public var id: String { item.id }
 
     public var sidebarDisplayText: String {
         item.title.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var trimmedTab: String {
-        item.tabTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var trimmedSection: String {
-        item.sectionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     /// Secondary line: "Tab · Section", collapsed to a single label when the
     /// tab and section (or section and setting) titles are effectively equal.
-    public var localizedTabAndSectionTitle: String {
-        let tab = trimmedTab
-        let section = trimmedSection
-        let sameTabSection = !tab.isEmpty && Self.normalizeLabel(tab) == Self.normalizeLabel(section)
-        let sameTitleSection = !section.isEmpty
-            && Self.normalizeLabel(sidebarDisplayText) == Self.normalizeLabel(section)
+    public var localizedTabAndSectionTitle: String { precomputedTabAndSectionTitle }
+
+    private static func makeTabAndSectionTitle(for item: SettingsSearchItem) -> String {
+        let tab = item.tabTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let section = item.sectionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedSection = normalizeLabel(section)
+        let sameTabSection = !tab.isEmpty && normalizeLabel(tab) == normalizedSection
+        let sameTitleSection = !section.isEmpty && normalizeLabel(title) == normalizedSection
         if sameTabSection || sameTitleSection { return tab }
         if tab.isEmpty { return section }
         if section.isEmpty { return tab }

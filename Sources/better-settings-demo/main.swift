@@ -85,12 +85,18 @@ let configuration = SettingsConfiguration(
                            keywords: ["color", "tint", "highlight"]),
     ],
     contentProvider: { tab, _ in
+        // Logs every (re)build so the unload policy below is observable: an evicted
+        // tab prints again when you return to it; a kept one does not.
+        print("contentProvider: building tab \(tab.id)")
         switch tab.id {
         case "general": return GeneralTab()
         case "appearance": return AppearanceTab()
         default: return AboutTab()
         }
-    }
+    },
+    // Demo runs the recommended low-RAM policy so the behavior is exercised:
+    // keep active + 1 previous live; drop to active-only when the window loses key.
+    tabUnloadPolicy: .balanced
 )
 
 // MARK: - App bootstrap
@@ -108,7 +114,7 @@ final class DemoAppDelegate: NSObject, NSApplicationDelegate {
 }
 
 let app = NSApplication.shared
-app.setActivationPolicy(.regular)
+app.setActivationPolicy(.accessory)
 let delegate = DemoAppDelegate()
 app.delegate = delegate
 app.run()

@@ -28,6 +28,18 @@ final class SettingsContentViewController: NSViewController {
     private var transitionGeneration: UInt = 0
     private var pendingNavigationTask: Task<Void, Never>?
 
+    // MARK: - Tab unload (RAM reclaim) — inert unless `tabUnloadPolicy != .keepAll`
+
+    /// Whether any unload bookkeeping runs at all. `.keepAll` keeps every code path
+    /// below behind a fast-return guard, so the default behaves exactly as before.
+    private lazy var unloadsTabs: Bool =
+        configuration.tabUnloadPolicy.keepRecentInactive != .max
+        || configuration.tabUnloadPolicy.dropsToActiveWhenWindowResignsKey
+    /// Tab IDs in least-recent → most-recent order; the active tab is always last.
+    private var mruTabIDs: [String] = []
+    private var pendingUnloadTask: Task<Void, Never>?
+    private var idleObserverToken: NSObjectProtocol?
+
     init(configuration: SettingsConfiguration, router: SettingsRouter) {
         self.configuration = configuration
         self.router = router
@@ -83,10 +95,12 @@ final class SettingsContentViewController: NSViewController {
         currentTabID = tabID
         // Drives the "Show Details" toggle animation against this tab's rows.
         SettingsDetailsAnimationCoordinator.shared.setActiveTabView(newView)
+        installIdlePolicyObserverIfNeeded()
 
         guard let oldView, animate else {
             newView.alphaValue = 1
             oldView?.removeFromSuperview()
+            scheduleUnloadEnforcement()
             return
         }
 
@@ -103,6 +117,7 @@ final class SettingsContentViewController: NSViewController {
                       self.transitionGeneration == generation,
                       self.currentTabView === newView else { return }
                 oldView?.removeFromSuperview()
+                self.scheduleUnloadEnforcement()
             }
         }
     }
@@ -112,6 +127,13 @@ final class SettingsContentViewController: NSViewController {
         navigationSubscription = nil
         pendingNavigationTask?.cancel()
         pendingNavigationTask = nil
+        pendingUnloadTask?.cancel()
+        pendingUnloadTask = nil
+        if let idleObserverToken {
+            NotificationCenter.default.removeObserver(idleObserverToken)
+            self.idleObserverToken = nil
+        }
+        mruTabIDs.removeAll()
         SettingsDetailsAnimationCoordinator.shared.setActiveTabView(nil)
         currentTabView?.removeFromSuperview()
         currentTabView = nil
@@ -129,6 +151,7 @@ final class SettingsContentViewController: NSViewController {
     // MARK: - Controller factory
 
     private func controller(for tabID: String) -> SettingsTabViewController {
+        touchMRU(tabID)
         if let cached = cache[tabID] { return cached }
         guard let tab = configuration.tab(for: tabID) else {
             fatalError("No tab registered for id \(tabID)")
@@ -181,6 +204,71 @@ final class SettingsContentViewController: NSViewController {
         let keep = Set(viewsToKeep.map(ObjectIdentifier.init))
         for subview in containerView.subviews where !keep.contains(ObjectIdentifier(subview)) {
             subview.removeFromSuperview()
+        }
+    }
+
+    // MARK: - Tab unload
+
+    private func touchMRU(_ tabID: String) {
+        guard unloadsTabs else { return }
+        if let index = mruTabIDs.firstIndex(of: tabID) { mruTabIDs.remove(at: index) }
+        mruTabIDs.append(tabID)
+    }
+
+    /// Defers eviction one runloop turn so a heavy `prepareForMemoryRelease` never
+    /// shares a frame with the just-finished crossfade. Coalesces repeated calls.
+    private func scheduleUnloadEnforcement(dropToActiveOnly: Bool = false) {
+        guard unloadsTabs else { return }
+        pendingUnloadTask?.cancel()
+        pendingUnloadTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self, !Task.isCancelled else { return }
+            self.enforceUnloadPolicy(dropToActiveOnly: dropToActiveOnly)
+        }
+    }
+
+    private func enforceUnloadPolicy(dropToActiveOnly: Bool) {
+        guard unloadsTabs, let currentTabID else { return }
+        let keepInactive = dropToActiveOnly ? 0 : configuration.tabUnloadPolicy.keepRecentInactive
+        guard keepInactive != .max else { return }
+
+        var keep: Set<String> = [currentTabID]
+        if keepInactive > 0 {
+            for tabID in mruTabIDs.reversed() where tabID != currentTabID {
+                keep.insert(tabID)
+                if keep.count >= keepInactive + 1 { break }
+            }
+        }
+
+        for (tabID, controller) in cache where !keep.contains(tabID) {
+            evict(controller, tabID: tabID)
+        }
+    }
+
+    private func evict(_ controller: SettingsTabViewController, tabID: String) {
+        // Never tear down a controller whose view is still on screen (e.g. the old
+        // view mid-crossfade) — that would visibly snap the animation.
+        if controller.isViewLoaded, controller.view.superview === containerView { return }
+        controller.prepareForMemoryRelease()
+        if controller.isViewLoaded { controller.view.removeFromSuperview() }
+        controller.removeFromParent()
+        cache.removeValue(forKey: tabID)
+        if let index = mruTabIDs.firstIndex(of: tabID) { mruTabIDs.remove(at: index) }
+    }
+
+    private func installIdlePolicyObserverIfNeeded() {
+        guard unloadsTabs,
+              configuration.tabUnloadPolicy.dropsToActiveWhenWindowResignsKey,
+              idleObserverToken == nil,
+              let window = view.window else { return }
+        idleObserverToken = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.scheduleUnloadEnforcement(dropToActiveOnly: true)
+            }
         }
     }
 }

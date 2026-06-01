@@ -204,12 +204,15 @@ open class SettingsTabViewController: NSViewController {
     open func handleNavigationRequest(_ request: SettingsNavigationRequest) {
         view.layoutSubtreeIfNeeded()
 
+        // `view.layoutSubtreeIfNeeded()` above already settled the layout, and
+        // nothing below dirties it, so use the no-flush cores to avoid repeating
+        // the full-subtree pass two more times.
         var highlightTarget: NSView?
         if let id = request.searchItemID, let target = searchTargetsByItemID[id], !target.isHidden {
-            if !isViewVisible(target) { scrollToView(target, animated: true) }
+            if !isViewVisibleAssumingLaidOut(target) { scrollToViewAssumingLaidOut(target, animated: true) }
             highlightTarget = target
         } else if let anchor = request.sectionAnchor, let target = sectionViewsByAnchor[anchor] {
-            if !isViewVisible(target) { scrollToView(target, animated: true) }
+            if !isViewVisibleAssumingLaidOut(target) { scrollToViewAssumingLaidOut(target, animated: true) }
             highlightTarget = target
         } else {
             scrollToTop(animated: true)
@@ -238,6 +241,11 @@ open class SettingsTabViewController: NSViewController {
 
     public func scrollToView(_ targetView: NSView, animated: Bool) {
         view.layoutSubtreeIfNeeded()
+        scrollToViewAssumingLaidOut(targetView, animated: animated)
+    }
+
+    /// Scroll core that assumes the caller already flushed layout.
+    private func scrollToViewAssumingLaidOut(_ targetView: NSView, animated: Bool) {
         guard targetView.isDescendant(of: documentView) else { return }
         let rectInDocument = documentView.convert(targetView.bounds, from: targetView)
         let toolbarOffset = scrollView.contentInsets.top + 8
@@ -246,6 +254,11 @@ open class SettingsTabViewController: NSViewController {
 
     public func isViewVisible(_ targetView: NSView) -> Bool {
         view.layoutSubtreeIfNeeded()
+        return isViewVisibleAssumingLaidOut(targetView)
+    }
+
+    /// Visibility core that assumes the caller already flushed layout.
+    private func isViewVisibleAssumingLaidOut(_ targetView: NSView) -> Bool {
         guard targetView.isDescendant(of: documentView) else { return false }
         let clipView = scrollView.contentView
         let rectInDocument = documentView.convert(targetView.bounds, from: targetView)

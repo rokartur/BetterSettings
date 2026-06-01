@@ -28,6 +28,9 @@ final class SidebarCellView: NSTableCellView {
     private var gradientStart: NSColor?
     private var gradientEnd: NSColor?
     private var allowsSelectionStyling = true
+    // Skips redundant re-applies (each one rebuilds CGColor arrays + dirties the
+    // gradient layer). Invalidated whenever the cell is reconfigured.
+    private var lastSelectionStyle: (isSelected: Bool, isEmphasized: Bool)?
 
     // Toggled constraints between tab and search-result layouts.
     private var iconWidth: NSLayoutConstraint!
@@ -150,6 +153,7 @@ final class SidebarCellView: NSTableCellView {
         gradientEnd: NSColor,
         isBeta: Bool
     ) {
+        lastSelectionStyle = nil
         setIconVisible(true)
         iconWidth.constant = iconScale
         iconHeight.constant = iconScale
@@ -167,6 +171,7 @@ final class SidebarCellView: NSTableCellView {
     }
 
     func configureAsSearchResult(title: String, subtitle: String) {
+        lastSelectionStyle = nil
         setIconVisible(false)
         symbolView.image = nil
         gradientStart = nil
@@ -181,6 +186,7 @@ final class SidebarCellView: NSTableCellView {
     }
 
     func configureAsEmpty(text: String) {
+        lastSelectionStyle = nil
         setIconVisible(false)
         symbolView.image = nil
         gradientStart = nil
@@ -223,6 +229,8 @@ final class SidebarCellView: NSTableCellView {
     // MARK: - Selection styling
 
     func applySelectionStyle(isSelected: Bool, isEmphasized: Bool) {
+        if let lastSelectionStyle, lastSelectionStyle == (isSelected, isEmphasized) { return }
+        lastSelectionStyle = (isSelected, isEmphasized)
         let dim = !isEmphasized
 
         guard allowsSelectionStyling, isSelected else {
