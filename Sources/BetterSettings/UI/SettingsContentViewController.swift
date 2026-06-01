@@ -146,6 +146,7 @@ final class SettingsContentViewController: NSViewController {
         cache.removeAll()
         lastHandledRequestID = nil
         containerView.subviews.forEach { $0.removeFromSuperview() }
+        SettingsRowView.releaseSharedCaches()
     }
 
     // MARK: - Controller factory

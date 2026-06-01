@@ -117,6 +117,28 @@ public final class SettingsRowView: NSView {
 
     // MARK: - Setup
 
+    // MARK: - Shared symbol-image cache
+
+    /// Memoizes base SF Symbol images by name across all rows. Symbols are looked
+    /// up unconfigured (decorative); each `NSImageView` applies its own size,
+    /// weight, and tint. Process-lifetime memo, cleared on window teardown via
+    /// `releaseSharedCaches()` (existing views retain their image, so clearing
+    /// only affects future builds). Main-actor isolated → no locking needed.
+    private static var symbolImageCache: [String: NSImage] = [:]
+
+    private static func cachedSymbolImage(named name: String) -> NSImage? {
+        if let cached = symbolImageCache[name] { return cached }
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) else { return nil }
+        symbolImageCache[name] = image
+        return image
+    }
+
+    /// Drops the shared symbol-image cache. Called on window teardown; the cache
+    /// repopulates lazily on the next build.
+    static func releaseSharedCaches() {
+        symbolImageCache.removeAll(keepingCapacity: false)
+    }
+
     private func setupViews(icon: String?, title: String, subtitle: String?, accessory: NSView?) {
         let normalizedSubtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines)
         hasSubtitleText = !(normalizedSubtitle?.isEmpty ?? true)
@@ -164,9 +186,9 @@ public final class SettingsRowView: NSView {
             self.subtitleLabel = subtitleLabel
             subtitleExpandedHeight = measuredSubtitleHeight(for: subtitleLabel)
             let subtitleHeightConstraint = subtitleContainer.heightAnchor.constraint(equalToConstant: subtitleExpandedHeight)
-            subtitleHeightConstraint.isActive = true
             self.subtitleHeightConstraint = subtitleHeightConstraint
             NSLayoutConstraint.activate([
+                subtitleHeightConstraint,
                 subtitleContainer.widthAnchor.constraint(equalTo: textColumn.widthAnchor),
                 subtitleLabel.topAnchor.constraint(equalTo: subtitleContainer.topAnchor, constant: Self.subtitleTopSpacing),
                 subtitleLabel.leadingAnchor.constraint(equalTo: subtitleContainer.leadingAnchor),
@@ -184,7 +206,10 @@ public final class SettingsRowView: NSView {
         if let icon, !icon.isEmpty {
             let iconView = NSImageView()
             iconView.translatesAutoresizingMaskIntoConstraints = false
-            iconView.image = NSImage(systemSymbolName: icon, accessibilityDescription: title)
+            // Shared base symbol image (decorative — the title label carries the
+            // a11y label). Size/weight/tint stay per-view, so the image is safe to
+            // reuse across rows and across tab rebuilds after an unload.
+            iconView.image = Self.cachedSymbolImage(named: icon)
             iconView.contentTintColor = .labelColor
             iconView.symbolConfiguration = .init(pointSize: 13, weight: .regular)
             iconView.setContentHuggingPriority(.required, for: .horizontal)
