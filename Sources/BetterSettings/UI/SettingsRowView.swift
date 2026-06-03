@@ -30,12 +30,12 @@ public final class SettingsRowView: NSView {
     private weak var cachedLayoutAnimationRoot: NSView?
     private var fillSuperviewWidthConstraint: NSLayoutConstraint?
     private var isAnimatingSubtitleVisibility = false
+    /// Target of the in-flight reveal animation, so a redundant same-direction
+    /// toggle is ignored instead of restarting the spring.
+    private var animatingTowardVisible: Bool?
     private var hasAppliedInitialSubtitleVisibility = false
-    private var subtitleAnimationGeneration: UInt = 0
     private var pendingSubtitleLayoutResolutionTask: Task<Void, Never>?
 
-    private static let subtitleAnimationDuration: TimeInterval = 0.2
-    private static let subtitleAnimationTiming = CAMediaTimingFunction(controlPoints: 0.22, 0.88, 0.32, 1.0)
     private static let subtitleFallbackWidth: CGFloat = 350
     private static let subtitleHeightEpsilon: CGFloat = 0.5
     private static let subtitleTopSpacing: CGFloat = 2
@@ -263,7 +263,9 @@ public final class SettingsRowView: NSView {
             subtitleExpandedHeight = measuredHeight
         }
 
-        subtitleAnimationGeneration &+= 1
+        SettingsDetailsSpringAnimator.shared.cancel(subtitleHeightConstraint)
+        isAnimatingSubtitleVisibility = false
+        animatingTowardVisible = nil
         performWithoutAnimation {
             subtitleContainerView?.isHidden = !shouldShowSubtitle
             subtitleLabel.isHidden = !shouldShowSubtitle
@@ -271,7 +273,6 @@ public final class SettingsRowView: NSView {
             subtitleHeightConstraint.constant = shouldShowSubtitle ? measuredHeight : 0
             layoutContainerIfNeeded()
         }
-        isAnimatingSubtitleVisibility = false
         scheduleSubtitleLayoutResolutionIfNeeded()
     }
 
@@ -292,9 +293,10 @@ public final class SettingsRowView: NSView {
         updateSubtitleVisibility(shouldShowSubtitle: notification.userInfo?["isOn"] as? Bool)
     }
 
-    /// Reveals or hides the subtitle with a single synchronized height + opacity
-    /// animation. All visible rows receive the same notification on the same run
-    /// loop turn, so they animate together in one motion.
+    /// Reveals or hides the subtitle. The actual motion is a vsync-locked spring
+    /// shared across every visible row (`SettingsDetailsSpringAnimator`), so all
+    /// rows expand/collapse together with the same smooth, lightly-settling curve
+    /// as the host app's menu-panel sections.
     private func updateSubtitleVisibility(shouldShowSubtitle: Bool? = nil) {
         guard hasSubtitleText,
               let subtitleContainerView,
@@ -305,9 +307,16 @@ public final class SettingsRowView: NSView {
         hasAppliedInitialSubtitleVisibility = true
 
         let shouldShow = shouldShowSubtitle ?? SettingsDetails.isOn
-        let isSubtitleVisible = !subtitleContainerView.isHidden && subtitleHeightConstraint.constant > Self.subtitleHeightEpsilon
 
-        guard shouldShow != isSubtitleVisible || isAnimatingSubtitleVisibility else { return }
+        // Already in (or already heading to) the requested state — ignore. This
+        // also stops a redundant same-direction toggle from restarting the spring.
+        if isAnimatingSubtitleVisibility {
+            if animatingTowardVisible == shouldShow { return }
+        } else {
+            let isSubtitleVisible = !subtitleContainerView.isHidden
+                && subtitleHeightConstraint.constant > Self.subtitleHeightEpsilon
+            if shouldShow == isSubtitleVisible { return }
+        }
 
         let targetHeight: CGFloat = shouldShow ? measuredSubtitleHeight(for: subtitleLabel) : 0
         if shouldShow {
@@ -318,76 +327,55 @@ public final class SettingsRowView: NSView {
             && window != nil
             && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
 
-        subtitleAnimationGeneration &+= 1
-        let generation = subtitleAnimationGeneration
-
         guard shouldAnimate else {
+            SettingsDetailsSpringAnimator.shared.cancel(subtitleHeightConstraint)
             isAnimatingSubtitleVisibility = false
+            animatingTowardVisible = nil
+            // Offscreen/unloaded tabs (window == nil) snap their state but skip the
+            // layout flush; they reconcile on their next viewDidMoveToWindow/layout.
+            let shouldFlush = window != nil
             performWithoutAnimation {
                 subtitleContainerView.isHidden = !shouldShow
                 subtitleLabel.isHidden = !shouldShow
                 subtitleLabel.alphaValue = shouldShow ? 1 : 0
                 subtitleHeightConstraint.constant = targetHeight
-                layoutContainerIfNeeded()
+                if shouldFlush { layoutContainerIfNeeded() }
             }
             return
         }
 
         isAnimatingSubtitleVisibility = true
+        animatingTowardVisible = shouldShow
 
-        if shouldShow {
-            performWithoutAnimation {
-                subtitleContainerView.isHidden = false
-                subtitleLabel.isHidden = false
-                subtitleLabel.alphaValue = 0
-                subtitleHeightConstraint.constant = 0
-                layoutContainerIfNeeded()
-            }
+        // Keep the subtitle in the tree for the whole tween. The spring rebases
+        // from the constraint's current value, so a reversal eases out of its
+        // current position instead of snapping to 0 first.
+        subtitleContainerView.isHidden = false
+        subtitleLabel.isHidden = false
 
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = Self.subtitleAnimationDuration
-                context.timingFunction = Self.subtitleAnimationTiming
-                context.allowsImplicitAnimation = true
-                subtitleHeightConstraint.animator().constant = targetHeight
-                subtitleLabel.animator().alphaValue = 1
-                layoutContainerIfNeeded()
-            }, completionHandler: {
-                Task { @MainActor [weak self] in
-                    guard let self,
-                          generation == self.subtitleAnimationGeneration,
-                          let subtitleLabel = self.subtitleLabel,
-                          let subtitleHeightConstraint = self.subtitleHeightConstraint else { return }
-                    self.isAnimatingSubtitleVisibility = false
-                    subtitleLabel.alphaValue = 1
-                    subtitleHeightConstraint.constant = self.subtitleExpandedHeight
-                    self.layoutContainerIfNeeded()
-                }
-            })
-            return
-        }
-
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = Self.subtitleAnimationDuration
-            context.timingFunction = Self.subtitleAnimationTiming
-            context.allowsImplicitAnimation = true
-            subtitleHeightConstraint.animator().constant = 0
-            subtitleLabel.animator().alphaValue = 0
-            layoutContainerIfNeeded()
-        }, completionHandler: {
-            Task { @MainActor [weak self] in
-                guard let self,
-                      generation == self.subtitleAnimationGeneration,
-                      let subtitleContainerView = self.subtitleContainerView,
-                      let subtitleLabel = self.subtitleLabel,
-                      let subtitleHeightConstraint = self.subtitleHeightConstraint else { return }
+        SettingsDetailsSpringAnimator.shared.animate(
+            constraint: subtitleHeightConstraint,
+            label: subtitleLabel,
+            root: layoutAnimationRoot(),
+            toHeight: targetHeight,
+            toAlpha: shouldShow ? 1 : 0,
+            onFinish: { [weak self] in
+                guard let self else { return }
                 self.isAnimatingSubtitleVisibility = false
-                subtitleHeightConstraint.constant = 0
-                subtitleLabel.alphaValue = 0
-                subtitleLabel.isHidden = true
-                subtitleContainerView.isHidden = true
-                self.layoutContainerIfNeeded()
+                self.animatingTowardVisible = nil
+                guard let subtitleLabel = self.subtitleLabel,
+                      let subtitleHeightConstraint = self.subtitleHeightConstraint else { return }
+                if shouldShow {
+                    subtitleHeightConstraint.constant = self.subtitleExpandedHeight
+                    subtitleLabel.alphaValue = 1
+                } else {
+                    subtitleHeightConstraint.constant = 0
+                    subtitleLabel.alphaValue = 0
+                    subtitleLabel.isHidden = true
+                    self.subtitleContainerView?.isHidden = true
+                }
             }
-        })
+        )
     }
 
     // MARK: - Subtitle measurement
