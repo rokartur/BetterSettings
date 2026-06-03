@@ -40,8 +40,9 @@ final class SettingsDetailsSpringAnimator {
     static let dampingCollapse: Double = 0.85
     /// Travel (points) at which a row is considered "tall" and uses the long response.
     static let referenceTravel: CGFloat = 80
-    /// Per-row start delay (seconds) so rows cascade top-to-bottom instead of
-    /// moving in dead unison — identical-height rows looked mechanical in lockstep.
+    /// Per-row start delay (seconds) so rows cascade top-to-bottom on **expand**
+    /// instead of moving in dead unison — identical-height rows looked mechanical
+    /// in lockstep. Collapse skips the cascade (all rows close together).
     static let stagger: Double = 0.03
     /// Cap on the cascade so a long tab doesn't ripple for too long.
     static let maxStagger: Double = 0.18
@@ -165,7 +166,13 @@ final class SettingsDetailsSpringAnimator {
         track.toAlpha = toAlpha
         track.onFinish = onFinish
         configureSpring(track)
-        if isNew {
+        // Collapse closes every row in the same instant (no cascade) — hiding
+        // details should feel like one motion, not a ripple. Expand still
+        // cascades top-to-bottom so identical-height rows don't open in dead unison.
+        let isCollapsing = toHeight < fromHeight - 0.5
+        if isCollapsing {
+            track.delay = 0
+        } else if isNew {
             track.delay = min(Double(batchIndex) * Self.stagger, Self.maxStagger)
             batchIndex += 1
         }
