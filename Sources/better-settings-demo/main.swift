@@ -55,6 +55,52 @@ final class AboutTab: SettingsTabViewController {
     }
 }
 
+// MARK: - Show Details test tabs (varying subtitle line counts)
+
+// Explicit "\n" so each tab hits an exact line count regardless of column width.
+private let oneLineSub = "Single line of detail text."
+private let twoLineSub = "First line of detail text.\nSecond line of detail text."
+private let threeLineSub = "First line of detail text.\nSecond line of detail text.\nThird line of detail text."
+private let fourLineSub = "First line of detail text.\nSecond line of detail text.\nThird line of detail text.\nFourth line of detail text."
+private let paragraphSub = "A deliberately long, multi-sentence paragraph used to stress the reveal/hide motion. It wraps across many lines so the height delta is large; when you toggle Show Details this row travels far and uses the full, slower spring while the one-line rows snap quickly. Add sentences here for an even taller subtitle."
+
+/// A tab full of identical-length subtitles so one line-count can be judged in isolation.
+final class LinesTab: SettingsTabViewController {
+    private let sectionTitle: String
+    private let subtitle: String
+    private let count: Int
+
+    init(sectionTitle: String, subtitle: String, count: Int) {
+        self.sectionTitle = sectionTitle
+        self.subtitle = subtitle
+        self.count = count
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func setupContent() {
+        let section = addSection(title: sectionTitle, anchor: "lines.main")
+        for i in 1...count {
+            addRow(to: section, title: "Item \(i)", subtitle: subtitle, accessory: NSSwitch())
+            if i < count { addDivider(to: section) }
+        }
+    }
+}
+
+/// Interleaves short and tall subtitles so short and long rows animate together —
+/// the case where short rows used to look cheap next to the tall ones.
+final class MixedTab: SettingsTabViewController {
+    override func setupContent() {
+        let subs = [oneLineSub, paragraphSub, oneLineSub, twoLineSub, fourLineSub, oneLineSub, threeLineSub, paragraphSub]
+        let section = addSection(title: "Mixed lengths", anchor: "mixed.main")
+        for (i, sub) in subs.enumerated() {
+            addRow(to: section, title: "Row \(i + 1)", subtitle: sub, accessory: NSSwitch())
+            if i < subs.count - 1 { addDivider(to: section) }
+        }
+    }
+}
+
 // MARK: - Configuration
 
 let configuration = SettingsConfiguration(
@@ -66,6 +112,16 @@ let configuration = SettingsConfiguration(
                                                     gradientEnd: SettingsColor(hex: 0x0062FF))),
         SettingsTab(id: "about", title: "About", icon: "info.circle.fill",
                     iconStyle: .solid(SettingsColor(hex: 0xFF6F00))),
+        SettingsTab(id: "oneline", title: "1 Line", icon: "text.alignleft",
+                    iconStyle: .solid(SettingsColor(hex: 0x34C759))),
+        SettingsTab(id: "twoline", title: "2 Lines", icon: "text.justify",
+                    iconStyle: .solid(SettingsColor(hex: 0x30B0C7))),
+        SettingsTab(id: "threeline", title: "3 Lines", icon: "text.justifyleft",
+                    iconStyle: .solid(SettingsColor(hex: 0x5856D6))),
+        SettingsTab(id: "paragraph", title: "Paragraph", icon: "doc.plaintext.fill",
+                    iconStyle: .solid(SettingsColor(hex: 0xAF52DE))),
+        SettingsTab(id: "mixed", title: "Mixed", icon: "rectangle.grid.1x2.fill",
+                    iconStyle: .solid(SettingsColor(hex: 0xFF2D55))),
     ],
     searchItems: [
         SettingsSearchItem(id: "general.launchAtLogin", tabID: "general", sectionAnchor: "general.behavior",
@@ -91,6 +147,11 @@ let configuration = SettingsConfiguration(
         switch tab.id {
         case "general": return GeneralTab()
         case "appearance": return AppearanceTab()
+        case "oneline": return LinesTab(sectionTitle: "One-line details", subtitle: oneLineSub, count: 7)
+        case "twoline": return LinesTab(sectionTitle: "Two-line details", subtitle: twoLineSub, count: 6)
+        case "threeline": return LinesTab(sectionTitle: "Three-line details", subtitle: threeLineSub, count: 6)
+        case "paragraph": return LinesTab(sectionTitle: "Paragraph details", subtitle: paragraphSub, count: 5)
+        case "mixed": return MixedTab()
         default: return AboutTab()
         }
     },

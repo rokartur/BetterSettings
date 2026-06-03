@@ -2,19 +2,19 @@
 //  SettingsDetailsSpringAnimator.swift
 //  BetterSettings
 //
-//  One vsync-locked spring drives the "Show Details" subtitle reveal/hide across
-//  every visible row at once — the same display-link spring technique the host
-//  app's menu panel uses for section expand/collapse, so the motion feels
-//  identical (response 0.35, damping 0.8 → smooth with a faint tactile settle).
+//  Vsync-locked spring driving the "Show Details" subtitle reveal/hide across
+//  every visible row at once, using the same display-link spring technique as the
+//  host app's menu panel so the motion feels consistent.
 //
-//  Rows self-register a track (subtitle height constraint + label) when the
-//  toggle fires; registrations on the same run-loop turn are coalesced into a
-//  single CADisplayLink that integrates ONE spring and, in one pass per tick,
-//  advances every track's height + opacity and lays out each affected root once.
-//  A re-toggle mid-flight retargets in place (spring restarts from 0 with the
-//  current velocity carried over) instead of snapping. Core Animation has no
-//  spring timing for an Auto Layout constraint constant, hence the manual
-//  per-frame integration — exactly what makes the height tween smooth.
+//  Rows self-register a track (subtitle height constraint + label) when the toggle
+//  fires; registrations on the same run-loop turn are coalesced under a single
+//  CADisplayLink (a 60 Hz Timer below macOS 14). Each track integrates its OWN
+//  spring so the duration scales with how far that row travels — a 1-line subtitle
+//  snaps quickly while a tall multi-line one glides — which keeps short rows from
+//  looking cheap/floaty. The link advances every track and lays out each affected
+//  root once per tick; a row finishes (and snaps to its resting state) as soon as
+//  its own spring settles. Core Animation has no spring timing for an Auto Layout
+//  constraint constant, hence the manual per-frame integration.
 //
 
 import AppKit
@@ -25,15 +25,29 @@ final class SettingsDetailsSpringAnimator {
 
     static let shared = SettingsDetailsSpringAnimator()
 
-    /// SwiftUI-style spring, matched to the menu panel (response 0.35, damping 0.8).
-    static let response: Double = 0.35
-    static let damping: Double = 0.8
+    /// SwiftUI-style spring `response` (period), interpolated by travel distance:
+    /// a short subtitle uses `*Short` (snappier) and a tall one `*Long` (fuller),
+    /// blended over `referenceTravel` points. Expand is under-damped → it
+    /// overshoots the open height and settles (lively). Collapse can't bounce
+    /// visibly (its past-0 overshoot is clamped), so it's a touch slower and more
+    /// damped → a smooth glide closed. Knobs: raise a `response*` to slow it;
+    /// raise a `damping*` toward 1 for less bounce.
+    static let responseExpandShort: Double = 0.26
+    static let responseExpandLong: Double = 0.45
+    static let responseCollapseShort: Double = 0.34
+    static let responseCollapseLong: Double = 0.72
+    static let dampingExpand: Double = 0.7
+    static let dampingCollapse: Double = 0.85
+    /// Travel (points) at which a row is considered "tall" and uses the long response.
+    static let referenceTravel: CGFloat = 80
+    /// Per-row start delay (seconds) so rows cascade top-to-bottom instead of
+    /// moving in dead unison — identical-height rows looked mechanical in lockstep.
+    static let stagger: Double = 0.03
+    /// Cap on the cascade so a long tab doesn't ripple for too long.
+    static let maxStagger: Double = 0.18
 
-    private let omega0: Double = 2 * .pi / SettingsDetailsSpringAnimator.response
-    private let zeta: Double = SettingsDetailsSpringAnimator.damping
-
-    /// A single row's subtitle tween: height constraint + label opacity, both
-    /// driven from `from` to `to` by the shared normalized spring position.
+    /// One row's subtitle tween + its own spring state, so each row's timing
+    /// scales with its travel distance.
     private final class Track {
         let constraint: NSLayoutConstraint
         weak var label: NSTextField?
@@ -43,6 +57,13 @@ final class SettingsDetailsSpringAnimator {
         var fromAlpha: CGFloat
         var toAlpha: CGFloat
         var onFinish: () -> Void
+
+        var s: Double = 0          // normalized spring position 0 → 1
+        var v: Double = 0          // normalized velocity
+        var omega0: Double = 0
+        var zeta: Double = 0
+        var settled = false
+        var delay: Double = 0      // seconds to wait before this row starts (cascade)
 
         init(constraint: NSLayoutConstraint, label: NSTextField?, root: NSView?,
              fromHeight: CGFloat, toHeight: CGFloat, fromAlpha: CGFloat, toAlpha: CGFloat,
@@ -56,6 +77,28 @@ final class SettingsDetailsSpringAnimator {
             self.toAlpha = toAlpha
             self.onFinish = onFinish
         }
+    }
+
+    /// Pick a track's response (scaled by its travel distance) + damping, and
+    /// reset its spring. On the animator so it can read the main-actor constants.
+    private func configureSpring(_ track: Track) {
+        let travel = abs(track.toHeight - track.fromHeight)
+        let t = min(1.0, max(0.0, Double(travel / Self.referenceTravel)))
+        // Ease the blend (t^1.5) so short rows stay a bit snappier than linear,
+        // without making them feel rushed, while tall ones ramp to the long response.
+        let tScaled = pow(t, 1.5)
+        let response: Double
+        if track.toHeight > track.fromHeight + 0.5 {
+            response = Self.responseExpandShort + (Self.responseExpandLong - Self.responseExpandShort) * tScaled
+            track.zeta = Self.dampingExpand
+        } else {
+            response = Self.responseCollapseShort + (Self.responseCollapseLong - Self.responseCollapseShort) * tScaled
+            track.zeta = Self.dampingCollapse
+        }
+        track.omega0 = 2 * .pi / response
+        track.s = 0
+        track.v = 0
+        track.settled = false
     }
 
     private var tracks: [ObjectIdentifier: Track] = [:]
@@ -76,19 +119,17 @@ final class SettingsDetailsSpringAnimator {
     private var timer: Timer?
     private var lastTimestamp: CFTimeInterval = 0
     private var startScheduled = false
-
-    /// Normalized spring position (0 → 1) and velocity.
-    private var s: Double = 0
-    private var v: Double = 0
     private var isRunning = false
+    private var batchIndex = 0          // running index for assigning cascade delays
+    private var elapsed: Double = 0      // seconds since this run started
 
     private init() {}
 
     // MARK: - Public API
 
-    /// Register (or retarget) a row's subtitle tween. Same-turn calls are
-    /// coalesced into one spring; a call while already running retargets every
-    /// in-flight track (rebased from its current value, velocity carried).
+    /// Register (or retarget) a row's subtitle tween. Same-turn calls are coalesced
+    /// under one display link; a call while running re-bases the track from its
+    /// current value and restarts that row's spring.
     func animate(
         constraint: NSLayoutConstraint,
         label: NSTextField?,
@@ -97,38 +138,43 @@ final class SettingsDetailsSpringAnimator {
         toAlpha: CGFloat,
         onFinish: @escaping () -> Void
     ) {
+        // First registration of a fresh batch resets the cascade counter.
+        if !isRunning && !startScheduled { batchIndex = 0 }
+
         let key = ObjectIdentifier(constraint)
         let fromHeight = constraint.constant
         let fromAlpha = label.map { CGFloat($0.alphaValue) } ?? toAlpha
 
+        let track: Track
+        let isNew: Bool
         if let existing = tracks[key] {
-            existing.fromHeight = fromHeight
-            existing.toHeight = toHeight
-            existing.fromAlpha = fromAlpha
-            existing.toAlpha = toAlpha
-            existing.label = label
-            existing.root = root
-            existing.onFinish = onFinish
+            track = existing
+            isNew = false
         } else {
-            tracks[key] = Track(
-                constraint: constraint, label: label, root: root,
-                fromHeight: fromHeight, toHeight: toHeight,
-                fromAlpha: fromAlpha, toAlpha: toAlpha, onFinish: onFinish
-            )
+            track = Track(constraint: constraint, label: label, root: root,
+                          fromHeight: fromHeight, toHeight: toHeight,
+                          fromAlpha: fromAlpha, toAlpha: toAlpha, onFinish: onFinish)
+            tracks[key] = track
+            isNew = true
+        }
+        track.label = label
+        track.root = root
+        track.fromHeight = fromHeight
+        track.toHeight = toHeight
+        track.fromAlpha = fromAlpha
+        track.toAlpha = toAlpha
+        track.onFinish = onFinish
+        configureSpring(track)
+        if isNew {
+            track.delay = min(Double(batchIndex) * Self.stagger, Self.maxStagger)
+            batchIndex += 1
         }
 
-        if isRunning {
-            // Retarget: restart the normalized spring from 0, keep velocity so a
-            // direction reversal eases out of its current motion instead of jumping.
-            s = 0
-            return
-        }
-
-        scheduleStart()
+        if !isRunning { scheduleStart() }
     }
 
-    /// Drop a row's track without firing its completion (the row is taking over
-    /// its own state, e.g. its subtitle text changed). Stops the clock if empty.
+    /// Drop a row's track without firing its completion (the row is taking over its
+    /// own state, e.g. its subtitle text changed). Stops the clock if empty.
     func cancel(_ constraint: NSLayoutConstraint) {
         tracks.removeValue(forKey: ObjectIdentifier(constraint))
         if tracks.isEmpty { stopClock() }
@@ -140,7 +186,7 @@ final class SettingsDetailsSpringAnimator {
         guard !startScheduled else { return }
         startScheduled = true
         // Let every row that observes the same notification register first, then
-        // start a single spring covering them all.
+        // start a single clock covering them all.
         DispatchQueue.main.async { [weak self] in
             self?.start()
         }
@@ -150,9 +196,8 @@ final class SettingsDetailsSpringAnimator {
         startScheduled = false
         guard !tracks.isEmpty, !isRunning else { return }
 
-        s = 0
-        v = 0
         lastTimestamp = 0
+        elapsed = 0
         isRunning = true
         scrollAnchor = captureScrollAnchor()
 
@@ -190,38 +235,44 @@ final class SettingsDetailsSpringAnimator {
         guard dt > 0 else { return }
         // Clamp dt so a dropped frame / paused app can't make the integrator explode.
         dt = min(max(dt, 1.0 / 240.0), 1.0 / 30.0)
+        elapsed += dt
 
-        // Semi-implicit Euler toward equilibrium s = 1.
-        let k = omega0 * omega0
-        let c = 2 * zeta * omega0
-        let a = -k * (s - 1.0) - c * v
-        v += a * dt
-        s += v * dt
-
-        let settled = abs(s - 1.0) < 0.001 && abs(v) < 0.01
-        // Clamp to [0, 1] so a faint spring overshoot never shows a gap or >1 alpha.
-        let progress = settled ? 1.0 : max(0.0, min(1.0, s))
-
-        if settled {
-            finish()
-            return
+        // Integrate each row's own spring (semi-implicit Euler toward s = 1), once
+        // its cascade delay has elapsed.
+        for track in tracks.values where !track.settled {
+            guard elapsed >= track.delay else { continue }
+            let k = track.omega0 * track.omega0
+            let c = 2 * track.zeta * track.omega0
+            let a = -k * (track.s - 1.0) - c * track.v
+            track.v += a * dt
+            track.s += track.v * dt
+            track.settled = abs(track.s - 1.0) < 0.001 && abs(track.v) < 0.01
         }
 
-        applyProgress(CGFloat(progress))
-    }
-
-    private func applyProgress(_ p: CGFloat) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-
         for track in tracks.values {
-            track.constraint.constant = track.fromHeight + (track.toHeight - track.fromHeight) * p
-            track.label?.alphaValue = track.fromAlpha + (track.toAlpha - track.fromAlpha) * p
+            // Height follows the raw spring (overshoot past target on expand),
+            // floored at 0 on collapse. Opacity stays clamped to [0, 1].
+            let p = track.settled ? 1.0 : track.s
+            let pa = track.settled ? 1.0 : max(0.0, min(1.0, track.s))
+            let h = track.fromHeight + (track.toHeight - track.fromHeight) * CGFloat(p)
+            track.constraint.constant = max(0, h)
+            track.label?.alphaValue = track.fromAlpha + (track.toAlpha - track.fromAlpha) * CGFloat(pa)
         }
         layoutRoots()
         applyScrollCompensation()
-
         CATransaction.commit()
+
+        // Retire rows whose spring has settled; fire their completions (which may
+        // hide the subtitle / re-layout), then stop the clock once none remain.
+        let settledKeys = tracks.filter { $0.value.settled }.map(\.key)
+        var completions: [() -> Void] = []
+        for key in settledKeys {
+            if let track = tracks.removeValue(forKey: key) { completions.append(track.onFinish) }
+        }
+        if tracks.isEmpty { stopClock() }
+        completions.forEach { $0() }
     }
 
     private func layoutRoots() {
@@ -231,27 +282,6 @@ final class SettingsDetailsSpringAnimator {
             guard laidOut.insert(ObjectIdentifier(root)).inserted else { continue }
             root.layoutSubtreeIfNeeded()
         }
-    }
-
-    // MARK: - Finish
-
-    private func finish() {
-        let finishing = Array(tracks.values)
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        for track in finishing {
-            track.constraint.constant = track.toHeight
-            track.label?.alphaValue = track.toAlpha
-        }
-        layoutRoots()
-        applyScrollCompensation()
-        CATransaction.commit()
-
-        stopClock()
-        tracks.removeAll()
-
-        for track in finishing { track.onFinish() }
     }
 
     private func stopClock() {
@@ -270,8 +300,8 @@ final class SettingsDetailsSpringAnimator {
     // MARK: - Scroll-position compensation
 
     /// Snapshot the clip origin and the first section intersecting the viewport,
-    /// so height changes above the fold can be cancelled out and the content
-    /// under the user's eyes stays put. Only meaningful when scrolled down.
+    /// so height changes above the fold can be cancelled out and the content under
+    /// the user's eyes stays put. Only meaningful when scrolled down.
     private func captureScrollAnchor() -> ScrollAnchor? {
         var scrollView: NSScrollView?
         for track in tracks.values {
