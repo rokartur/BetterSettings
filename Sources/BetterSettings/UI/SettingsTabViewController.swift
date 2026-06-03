@@ -12,6 +12,7 @@
 //
 
 import AppKit
+import Combine
 import QuartzCore
 
 @MainActor
@@ -69,6 +70,17 @@ open class SettingsTabViewController: NSViewController {
 
     private var sectionViewsByAnchor: [String: NSView] = [:]
     private var searchTargetsByItemID: [String: NSView] = [:]
+
+    // MARK: - Shared release state
+
+    /// Subscription bag for subclasses. Automatically cancelled in
+    /// `prepareForMemoryRelease()`, so a tab need not clear it by hand when it is
+    /// unloaded (low-RAM policy) or the window closes.
+    public var cancellables = Set<AnyCancellable>()
+
+    /// Child sheet/window controllers registered via `trackForRelease(_:)`, closed
+    /// and dropped on release.
+    private var releaseTrackedWindowControllers: [NSWindowController] = []
 
     // MARK: - Highlight state
 
@@ -131,9 +143,25 @@ open class SettingsTabViewController: NSViewController {
     /// `register(section:)`, and `register(searchTarget:)`.
     open func setupContent() {}
 
-    /// Called before the controller is released on window close.
+    /// Register a child sheet/window controller so it is closed and dropped when
+    /// this tab is unloaded (low-RAM policy) or the window closes. The caller may
+    /// still keep its own optional + `onDidDismiss` for re-presentation guards.
+    public func trackForRelease(_ controller: NSWindowController) {
+        releaseTrackedWindowControllers.append(controller)
+    }
+
+    /// Called before the controller is released on tab unload or window close.
+    /// Tears down the shared subscription bag and tracked child windows first, so
+    /// no in-flight sink or sheet touches a half-dismantled view tree, then strips
+    /// the view hierarchy. Subclasses override to add app-specific cleanup and must
+    /// call `super.prepareForMemoryRelease()`.
     open func prepareForMemoryRelease() {
         guard isViewLoaded else { return }
+        cancellables.removeAll()
+        for controller in releaseTrackedWindowControllers {
+            controller.close()
+        }
+        releaseTrackedWindowControllers.removeAll()
         removeSearchHighlight()
         for sub in contentStack.arrangedSubviews {
             contentStack.removeArrangedSubview(sub)
