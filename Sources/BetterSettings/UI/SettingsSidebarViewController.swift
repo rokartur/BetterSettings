@@ -229,72 +229,16 @@ final class SettingsSidebarViewController: NSViewController,
 
     @objc private func detailsToggleChanged(_ sender: NSSwitch) {
         let isOn = sender.state == .on
-        let shouldAnimate = view.window != nil && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
 
-        guard shouldAnimate else {
-            SettingsDetails.write(isOn)
-            NotificationCenter.default.post(
-                name: .betterSettingsShowDetailsDidChange,
-                object: nil,
-                userInfo: ["isOn": isOn]
-            )
-            return
-        }
-
-        let coordinator = SettingsDetailsAnimationCoordinator.shared
-        let animationGeneration = coordinator.beginToggleAnimation()
-        let scrollAnchor = coordinator.captureScrollAnchor()
-
-        coordinator.prepareActiveTabLayoutForAnimation()
+        // Persist the new state, then let every row run its own synchronized
+        // height + opacity animation off the same notification. No staged phases
+        // or scroll compensation — the rows move together in one smooth motion.
         SettingsDetails.write(isOn)
-
-        let baseUserInfo: [String: Any] = ["isOn": isOn, "animationGeneration": animationGeneration]
-
-        // Phase 1: fade subtitles out (no-op when revealing).
         NotificationCenter.default.post(
             name: .betterSettingsShowDetailsDidChange,
             object: nil,
-            userInfo: baseUserInfo.merging([
-                "animationPhase": SettingsDetailsAnimationCoordinator.ToggleAnimationPhase.subtitleFade.rawValue
-            ]) { _, new in new }
+            userInfo: ["isOn": isOn]
         )
-
-        let runLayoutTransition = {
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = SettingsDetailsAnimationCoordinator.sectionResizeDuration(for: isOn)
-                context.timingFunction = SettingsDetailsAnimationCoordinator.sectionResizeTiming(for: isOn)
-                context.allowsImplicitAnimation = true
-
-                // Phase 2: animate section heights inside this group.
-                NotificationCenter.default.post(
-                    name: .betterSettingsShowDetailsDidChange,
-                    object: nil,
-                    userInfo: baseUserInfo.merging([
-                        "animationPhase": SettingsDetailsAnimationCoordinator.ToggleAnimationPhase.layoutTransition.rawValue
-                    ]) { _, new in new }
-                )
-
-                coordinator.flushLayouts()
-                coordinator.animateScrollCompensation(from: scrollAnchor)
-            }, completionHandler: {
-                Task { @MainActor in
-                    coordinator.finishToggleAnimation(generation: animationGeneration)
-                }
-            })
-        }
-
-        let delay = SettingsDetailsAnimationCoordinator.layoutPhaseDelay(for: isOn)
-        if delay <= 0 {
-            guard coordinator.isAnimatingToggle(generation: animationGeneration) else { return }
-            runLayoutTransition()
-            return
-        }
-
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            guard coordinator.isAnimatingToggle(generation: animationGeneration) else { return }
-            runLayoutTransition()
-        }
     }
 
     private func updateSearchTopInsetRelativeToTrafficLights() {

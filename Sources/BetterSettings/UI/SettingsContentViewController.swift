@@ -93,8 +93,6 @@ final class SettingsContentViewController: NSViewController {
 
         currentTabView = newView
         currentTabID = tabID
-        // Drives the "Show Details" toggle animation against this tab's rows.
-        SettingsDetailsAnimationCoordinator.shared.setActiveTabView(newView)
         installIdlePolicyObserverIfNeeded()
 
         guard let oldView, animate else {
@@ -134,7 +132,6 @@ final class SettingsContentViewController: NSViewController {
             self.idleObserverToken = nil
         }
         mruTabIDs.removeAll()
-        SettingsDetailsAnimationCoordinator.shared.setActiveTabView(nil)
         currentTabView?.removeFromSuperview()
         currentTabView = nil
         currentTabID = nil
