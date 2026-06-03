@@ -73,10 +73,12 @@ open class SettingsTabViewController: NSViewController {
 
     // MARK: - Shared release state
 
-    /// Subscription bag for subclasses. Automatically cancelled in
-    /// `prepareForMemoryRelease()`, so a tab need not clear it by hand when it is
-    /// unloaded (low-RAM policy) or the window closes.
-    public var cancellables = Set<AnyCancellable>()
+    /// Opt-in Combine bag: anything stored here is cancelled automatically in
+    /// `prepareForMemoryRelease()` (tab unload or window close), so a tab need not
+    /// clear it by hand. Deliberately NOT named `cancellables` — a subclass stored
+    /// property of the same name would be an illegal override of this one, so the
+    /// distinct name keeps the addition non-breaking for tabs that keep their own bag.
+    public var releaseBag = Set<AnyCancellable>()
 
     /// Child sheet/window controllers registered via `trackForRelease(_:)`. Held
     /// weakly so a dismissed sheet (whose owner already dropped its reference) is
@@ -158,7 +160,7 @@ open class SettingsTabViewController: NSViewController {
     /// call `super.prepareForMemoryRelease()`.
     open func prepareForMemoryRelease() {
         guard isViewLoaded else { return }
-        cancellables.removeAll()
+        releaseBag.removeAll()
         for controller in releaseTrackedWindowControllers.allObjects {
             controller.close()
         }
