@@ -78,9 +78,10 @@ open class SettingsTabViewController: NSViewController {
     /// unloaded (low-RAM policy) or the window closes.
     public var cancellables = Set<AnyCancellable>()
 
-    /// Child sheet/window controllers registered via `trackForRelease(_:)`, closed
-    /// and dropped on release.
-    private var releaseTrackedWindowControllers: [NSWindowController] = []
+    /// Child sheet/window controllers registered via `trackForRelease(_:)`. Held
+    /// weakly so a dismissed sheet (whose owner already dropped its reference) is
+    /// not pinned until release; on release any still-open one is closed.
+    private let releaseTrackedWindowControllers = NSHashTable<NSWindowController>.weakObjects()
 
     // MARK: - Highlight state
 
@@ -147,7 +148,7 @@ open class SettingsTabViewController: NSViewController {
     /// this tab is unloaded (low-RAM policy) or the window closes. The caller may
     /// still keep its own optional + `onDidDismiss` for re-presentation guards.
     public func trackForRelease(_ controller: NSWindowController) {
-        releaseTrackedWindowControllers.append(controller)
+        releaseTrackedWindowControllers.add(controller)
     }
 
     /// Called before the controller is released on tab unload or window close.
@@ -158,10 +159,10 @@ open class SettingsTabViewController: NSViewController {
     open func prepareForMemoryRelease() {
         guard isViewLoaded else { return }
         cancellables.removeAll()
-        for controller in releaseTrackedWindowControllers {
+        for controller in releaseTrackedWindowControllers.allObjects {
             controller.close()
         }
-        releaseTrackedWindowControllers.removeAll()
+        releaseTrackedWindowControllers.removeAllObjects()
         removeSearchHighlight()
         for sub in contentStack.arrangedSubviews {
             contentStack.removeArrangedSubview(sub)
