@@ -92,6 +92,34 @@ final class SettingsRowSubtitleTests: XCTestCase {
         XCTAssertGreaterThan(column.bounds.width, 400, "the column sized to its text, not the row")
     }
 
+    // BetterAudio's Automation tab re-sent 8 unchanged subtitles on every appear; each one
+    // laid out the whole page, so the tab took over a second to show.
+    func testUnchangedSubtitleDoesNotLayOutThePage() async throws {
+        let subtitle = "Switch devices when one of these apps becomes active"
+        let row = SettingsRowView(title: "Meeting apps", subtitle: subtitle, accessory: NSSwitch())
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: true)
+        let host = LayoutCountingView(frame: NSRect(x: 0, y: 0, width: 420, height: 200))
+        window.contentView = host
+        host.addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            row.topAnchor.constraint(equalTo: host.topAnchor),
+        ])
+        for _ in 0..<8 {
+            host.layoutSubtreeIfNeeded()
+            await Task.yield()
+        }
+
+        host.needsLayout = true
+        host.layoutCount = 0
+        row.update(subtitle: subtitle)
+
+        XCTAssertEqual(host.layoutCount, 0, "an unchanged subtitle forced a page layout")
+    }
+
     /// The subtitle is the smaller of the row's two labels.
     private func subtitleLabel(in row: SettingsRowView) -> NSTextField? {
         var fields: [NSTextField] = []
@@ -103,5 +131,14 @@ final class SettingsRowSubtitleTests: XCTestCase {
         }
         walk(row)
         return fields.min { ($0.font?.pointSize ?? 0) < ($1.font?.pointSize ?? 0) }
+    }
+}
+
+private final class LayoutCountingView: NSView {
+    var layoutCount = 0
+
+    override func layout() {
+        layoutCount += 1
+        super.layout()
     }
 }

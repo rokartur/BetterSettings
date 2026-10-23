@@ -254,6 +254,8 @@ public final class SettingsRowView: NSView {
         guard let subtitleLabel, let subtitleHeightConstraint else { return }
 
         let normalizedSubtitle = subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Each remeasure lays out the whole settings page; hosts re-send unchanged text on every appear.
+        guard normalizedSubtitle != subtitleLabel.stringValue else { return }
         hasSubtitleText = !normalizedSubtitle.isEmpty
         subtitleLabel.stringValue = normalizedSubtitle
         invalidateCachedSubtitleMeasurement()
