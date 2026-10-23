@@ -103,7 +103,10 @@ final class SettingsSidebarViewController: NSViewController,
         super.viewDidLoad()
         setupSearchField()
         setupTableView()
-        if configuration.showsDetailsToggle {
+        if #available(macOS 26.0, *) {
+            // The details toggle, when shown, is the split item's bottom accessory (makeDetailsAccessory).
+            scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor).isActive = true
+        } else if configuration.showsDetailsToggle {
             setupDetailsToggle()
         } else {
             pinScrollViewBottomToView()
@@ -184,6 +187,14 @@ final class SettingsSidebarViewController: NSViewController,
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
 
+        if #available(macOS 26.0, *) {
+            // The search field lives in the split item's top accessory (makeSearchAccessory),
+            // so the list runs to the top and scrolls under it with the system edge effect.
+            scrollView.automaticallyAdjustsContentInsets = true
+            scrollView.topAnchor.constraint(equalTo: view.topAnchor).isActive = true
+            return
+        }
+
         view.addSubview(searchField)
         let topConstraint = searchField.topAnchor.constraint(equalTo: view.topAnchor, constant: Metrics.searchTopInset)
         searchTopConstraint = topConstraint
@@ -195,6 +206,26 @@ final class SettingsSidebarViewController: NSViewController,
             searchField.heightAnchor.constraint(equalToConstant: Metrics.searchHeight),
             scrollView.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: Metrics.searchBottomSpacing),
         ])
+    }
+
+    @available(macOS 26.0, *)
+    func makeSearchAccessory() -> NSSplitViewItemAccessoryViewController {
+        let container = NSView()
+        container.addSubview(searchField)
+        NSLayoutConstraint.activate([
+            searchField.topAnchor.constraint(equalTo: container.topAnchor),
+            searchField.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -Metrics.searchBottomSpacing),
+            // The accessory already insets its content to the source-list row inset; adding ours made the field narrower than the rows.
+            searchField.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            searchField.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            searchField.heightAnchor.constraint(equalToConstant: Metrics.searchHeight),
+        ])
+        let accessory = NSSplitViewItemAccessoryViewController()
+        accessory.view = container
+        if #available(macOS 26.1, *) {
+            accessory.preferredScrollEdgeEffectStyle = .soft
+        }
+        return accessory
     }
 
     private func pinScrollViewBottomToView() {
@@ -211,6 +242,27 @@ final class SettingsSidebarViewController: NSViewController,
             bar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Metrics.horizontalPadding),
             bar.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -12),
         ])
+    }
+
+    @available(macOS 26.0, *)
+    func makeDetailsAccessory() -> NSSplitViewItemAccessoryViewController? {
+        guard configuration.showsDetailsToggle else { return nil }
+        let bar = makeDetailsBar()
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        let container = NSView()
+        container.addSubview(bar)
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
+            bar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            bar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: Metrics.horizontalPadding),
+            bar.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -Metrics.horizontalPadding),
+        ])
+        let accessory = NSSplitViewItemAccessoryViewController()
+        accessory.view = container
+        if #available(macOS 26.1, *) {
+            accessory.preferredScrollEdgeEffectStyle = .soft
+        }
+        return accessory
     }
 
     private func makeDetailsBar() -> NSView {
