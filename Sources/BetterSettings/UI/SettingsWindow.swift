@@ -30,6 +30,12 @@ public final class SettingsWindow: NSWindow {
             performMiniaturize(nil)
             return true
         }
+        if modifiers == .command, event.charactersIgnoringModifiers == "[" {
+            return NSApp.sendAction(#selector(SettingsWindowController.goBack(_:)), to: nil, from: self)
+        }
+        if modifiers == .command, event.charactersIgnoringModifiers == "]" {
+            return NSApp.sendAction(#selector(SettingsWindowController.goForward(_:)), to: nil, from: self)
+        }
         return super.performKeyEquivalent(with: event)
     }
 

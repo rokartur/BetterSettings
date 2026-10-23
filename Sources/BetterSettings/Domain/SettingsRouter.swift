@@ -28,11 +28,40 @@ public struct SettingsNavigationRequest: Sendable, Equatable {
 
 @MainActor
 public final class SettingsRouter: ObservableObject {
-    @Published public var selectedTabID: String
+    @Published public var selectedTabID: String {
+        didSet { recordInHistory(selectedTabID) }
+    }
     @Published public var navigationRequest: SettingsNavigationRequest?
+
+    /// Visited tabs, oldest first; `historyIndex` points at the shown one.
+    private(set) var history: [String]
+    @Published public private(set) var historyIndex = 0
+
+    public var canGoBack: Bool { historyIndex > 0 }
+    public var canGoForward: Bool { historyIndex < history.count - 1 }
 
     public init(selectedTabID: String) {
         self.selectedTabID = selectedTabID
+        self.history = [selectedTabID]
+    }
+
+    public func goBack() {
+        guard canGoBack else { return }
+        historyIndex -= 1
+        selectedTabID = history[historyIndex]
+    }
+
+    public func goForward() {
+        guard canGoForward else { return }
+        historyIndex += 1
+        selectedTabID = history[historyIndex]
+    }
+
+    private func recordInHistory(_ tabID: String) {
+        guard history[historyIndex] != tabID else { return }
+        history.removeSubrange((historyIndex + 1)...)
+        history.append(tabID)
+        historyIndex += 1
     }
 
     /// Selects a tab and scrolls it to the top.

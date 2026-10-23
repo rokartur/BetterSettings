@@ -10,11 +10,23 @@ import AppKit
 import Combine
 
 @MainActor
-public final class SettingsWindowController: NSWindowController, NSWindowDelegate {
+public final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate {
 
     public let router: SettingsRouter
     private let configuration: SettingsConfiguration
     private let splitVC: SettingsSplitViewController
+
+    private static let historyItemID = NSToolbarItem.Identifier("BetterSettings.history")
+    private let historyControl = NSSegmentedControl(
+        images: [
+            NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Back")!,
+            NSImage(systemSymbolName: "chevron.right", accessibilityDescription: "Forward")!,
+        ],
+        trackingMode: .momentary,
+        target: nil,
+        action: nil
+    )
+    private var historySubscription: AnyCancellable?
 
     /// Builds the controller. The first tab is selected unless `initialTabID`
     /// names another tab.
@@ -42,6 +54,17 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         window.setContentSize(configuration.windowSize)
         window.contentMinSize = configuration.windowSize
         window.contentMaxSize = configuration.windowSize
+
+        historyControl.target = self
+        historyControl.action = #selector(historyControlClicked(_:))
+        historyControl.segmentStyle = .separated
+        historyControl.setToolTip("Back", forSegment: 0)
+        historyControl.setToolTip("Forward", forSegment: 1)
+        window.toolbar?.delegate = self
+        window.toolbar?.insertItem(withItemIdentifier: Self.historyItemID, at: 0)
+        historySubscription = router.$historyIndex
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.updateHistoryControl() }
     }
 
     @available(*, unavailable)
@@ -83,6 +106,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
     /// Tears down child controllers and releases the window for memory.
     public func tearDownAndReleaseWindow() {
+        historySubscription = nil
         splitVC.tearDown()
         guard let window else { return }
         window.makeFirstResponder(nil)
@@ -91,6 +115,54 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         window.toolbar = nil
         window.contentViewController = nil
         self.window = nil
+    }
+
+    // MARK: - Back / forward
+
+    /// Reached through the responder chain for ⌘[ (see `SettingsWindow`).
+    @objc public func goBack(_ sender: Any?) {
+        router.goBack()
+    }
+
+    @objc public func goForward(_ sender: Any?) {
+        router.goForward()
+    }
+
+    @objc private func historyControlClicked(_ sender: NSSegmentedControl) {
+        if sender.selectedSegment == 0 {
+            router.goBack()
+        } else {
+            router.goForward()
+        }
+    }
+
+    private func updateHistoryControl() {
+        historyControl.setEnabled(router.canGoBack, forSegment: 0)
+        historyControl.setEnabled(router.canGoForward, forSegment: 1)
+    }
+
+    // MARK: - NSToolbarDelegate
+
+    public func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [Self.historyItemID]
+    }
+
+    public func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [Self.historyItemID]
+    }
+
+    public func toolbar(
+        _ toolbar: NSToolbar,
+        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool
+    ) -> NSToolbarItem? {
+        guard itemIdentifier == Self.historyItemID else { return nil }
+        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+        item.view = historyControl
+        item.label = "Back/Forward"
+        item.isNavigational = true
+        updateHistoryControl()
+        return item
     }
 
     // MARK: - NSWindowDelegate
