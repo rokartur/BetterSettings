@@ -147,6 +147,7 @@ final class SidebarCellView: NSTableCellView {
 
     func configureAsTab(
         title: String,
+        subtitle: String? = nil,
         iconImage: NSImage?,
         iconScale: CGFloat,
         gradientStart: NSColor,
@@ -165,24 +166,9 @@ final class SidebarCellView: NSTableCellView {
         allowsSelectionStyling = true
 
         titleField.stringValue = title
-        setSubtitle(nil)
+        setSubtitle(subtitle)
         setBetaVisible(isBeta)
         iconBadge.setGradient(start: gradientStart, end: gradientEnd, opacity: 1)
-    }
-
-    func configureAsSearchResult(title: String, subtitle: String) {
-        lastSelectionStyle = nil
-        setIconVisible(false)
-        symbolView.image = nil
-        gradientStart = nil
-        gradientEnd = nil
-        baseTitleColor = .labelColor
-        baseSubtitleColor = .secondaryLabelColor
-        allowsSelectionStyling = true
-        titleField.stringValue = title
-        setSubtitle(subtitle)
-        setBetaVisible(false)
-        iconBadge.setGradient(start: nil, end: nil)
     }
 
     func configureAsEmpty(text: String) {

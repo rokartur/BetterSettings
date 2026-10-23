@@ -544,26 +544,35 @@ final class SettingsSidebarViewController: NSViewController,
         switch row {
         case .tab(let id):
             guard let tab = tabsByID[id] else { return }
-            let gradient = gradientColorsByID[id]
-                ?? (tab.iconStyle.gradientStart.nsColor, tab.iconStyle.gradientEnd.nsColor)
-            cell.configureAsTab(
-                title: tab.title,
-                iconImage: tabSymbolImage(for: tab),
-                iconScale: clampedIconSize(for: tab.iconStyle),
-                gradientStart: gradient.start,
-                gradientEnd: gradient.end,
-                isBeta: tab.isBeta
-            )
+            configureTabIcon(cell: cell, tab: tab, title: tab.title, subtitle: nil, isBeta: tab.isBeta)
         case .setting(let result):
-            cell.configureAsSearchResult(
+            guard let tab = tabsByID[result.item.tabID] else { return }
+            configureTabIcon(
+                cell: cell,
+                tab: tab,
                 title: result.sidebarDisplayText,
-                subtitle: result.localizedTabAndSectionTitle
+                subtitle: result.localizedTabAndSectionTitle,
+                isBeta: false
             )
         case .empty:
             cell.configureAsEmpty(text: configuration.noResultsText)
         case .header:
             break
         }
+    }
+
+    private func configureTabIcon(cell: SidebarCellView, tab: SettingsTab, title: String, subtitle: String?, isBeta: Bool) {
+        let gradient = gradientColorsByID[tab.id]
+            ?? (tab.iconStyle.gradientStart.nsColor, tab.iconStyle.gradientEnd.nsColor)
+        cell.configureAsTab(
+            title: title,
+            subtitle: subtitle,
+            iconImage: tabSymbolImage(for: tab),
+            iconScale: clampedIconSize(for: tab.iconStyle),
+            gradientStart: gradient.start,
+            gradientEnd: gradient.end,
+            isBeta: isBeta
+        )
     }
 
     private func clampedIconSize(for style: SettingsTabIconStyle) -> CGFloat {
