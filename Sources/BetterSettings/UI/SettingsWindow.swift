@@ -48,14 +48,8 @@ public final class SettingsWindow: NSWindow {
         )
 
         titleVisibility = .visible
-        // macOS 26+ blurs scrolled content under the toolbar itself; an opaque titlebar there draws a band that overhangs the sidebar.
-        if #available(macOS 26.0, *) {
-            titlebarAppearsTransparent = true
-            titlebarSeparatorStyle = .none
-        } else {
-            titlebarAppearsTransparent = false
-            titlebarSeparatorStyle = .automatic
-        }
+        titlebarAppearsTransparent = false
+        titlebarSeparatorStyle = .automatic
 
         isMovableByWindowBackground = true
         isReleasedWhenClosed = true
