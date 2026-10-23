@@ -124,6 +124,7 @@ final class SettingsSidebarViewController: NSViewController,
     override func viewDidAppear() {
         super.viewDidAppear()
         installWindowActivityObservers()
+        if tableView.selectedRow >= 0 { tableView.scrollRowToVisible(tableView.selectedRow) }
         refreshVisibleRowStyles()
     }
 
@@ -383,7 +384,9 @@ final class SettingsSidebarViewController: NSViewController,
             isProgrammaticSelection = true
             defer { isProgrammaticSelection = false }
             tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
-            tableView.scrollRowToVisible(index)
+            // Before the window shows, the top accessory's content inset is not applied yet,
+            // so scrolling now leaves the list offset by it; viewDidAppear scrolls instead.
+            if view.window?.isVisible == true { tableView.scrollRowToVisible(index) }
         }
         refreshVisibleRowStyles()
     }
