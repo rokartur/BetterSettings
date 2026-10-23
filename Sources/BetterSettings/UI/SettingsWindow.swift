@@ -18,12 +18,16 @@ public final class SettingsWindow: NSWindow {
     override public nonisolated var canBecomeKey: Bool { true }
     override public nonisolated var canBecomeMain: Bool { true }
 
-    /// Handle ⌘W locally. Accessory (menu-bar) apps have no File ▸ Close menu
-    /// item to route the shortcut, so close the window directly.
+    /// Handle ⌘W and ⌘M locally. Accessory (menu-bar) apps have no File or Window
+    /// menu to route the shortcuts.
     override public func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if modifiers == .command, event.charactersIgnoringModifiers?.lowercased() == "w" {
             performClose(nil)
+            return true
+        }
+        if modifiers == .command, event.charactersIgnoringModifiers?.lowercased() == "m" {
+            performMiniaturize(nil)
             return true
         }
         return super.performKeyEquivalent(with: event)
@@ -32,7 +36,7 @@ public final class SettingsWindow: NSWindow {
     init(contentSize: NSSize) {
         super.init(
             contentRect: NSRect(origin: .zero, size: contentSize),
-            styleMask: [.titled, .closable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -52,6 +56,7 @@ public final class SettingsWindow: NSWindow {
         collectionBehavior.insert(.moveToActiveSpace)
         collectionBehavior.insert(.fullScreenAuxiliary)
         animationBehavior = .default
+        standardWindowButton(.zoomButton)?.isHidden = true
 
         let toolbar = NSToolbar(identifier: "BetterSettingsToolbar")
         toolbar.displayMode = .iconOnly

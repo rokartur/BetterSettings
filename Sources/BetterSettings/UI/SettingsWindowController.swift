@@ -59,7 +59,11 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         }
         guard let window else { return }
 
-        if !window.isVisible { window.center() }
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        } else if !window.isVisible {
+            window.center()
+        }
 
         // Activate the app first, then key the window. `orderFrontRegardless`
         // surfaces it even while another app is frontmost.
