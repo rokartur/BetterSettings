@@ -48,7 +48,7 @@ final class SettingsSplitViewController: NSSplitViewController {
         sidebarItem.minimumThickness = effectiveSidebarThickness
         sidebarItem.maximumThickness = effectiveSidebarThickness
         sidebarItem.holdingPriority = .init(rawValue: NSLayoutConstraint.Priority.required.rawValue - 1)
-        if #available(macOS 26.0, *), SettingsSidebarViewController.usesSplitItemAccessories {
+        if #available(macOS 26.0, *) {
             sidebarItem.addTopAlignedAccessoryViewController(sidebarVC.makeSearchAccessory())
             if let detailsAccessory = sidebarVC.makeDetailsAccessory() {
                 sidebarItem.addBottomAlignedAccessoryViewController(detailsAccessory)
