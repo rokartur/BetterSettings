@@ -22,6 +22,7 @@ open class SettingsTabViewController: NSViewController {
 
     private static let sectionSpacing: CGFloat = 32
     private static let horizontalPadding: CGFloat = 16
+    private static let topPadding: CGFloat = 8
     private static let bottomPadding: CGFloat = 20
 
     // MARK: - Highlight constants
@@ -120,7 +121,7 @@ open class SettingsTabViewController: NSViewController {
             documentView.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
             documentView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
 
-            contentStack.topAnchor.constraint(equalTo: documentView.topAnchor),
+            contentStack.topAnchor.constraint(equalTo: documentView.topAnchor, constant: Self.topPadding),
             contentStack.leadingAnchor.constraint(equalTo: documentView.leadingAnchor, constant: Self.horizontalPadding),
             contentStack.trailingAnchor.constraint(equalTo: documentView.trailingAnchor, constant: -Self.horizontalPadding),
             contentStack.bottomAnchor.constraint(equalTo: documentView.bottomAnchor, constant: -Self.bottomPadding),
