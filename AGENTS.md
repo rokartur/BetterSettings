@@ -1,3 +1,7 @@
+# BetterSettings, agent guide
+
+Swift package: a macOS System Settings-style window in programmatic AppKit. `README.md` has the public API and usage; this file has the rules for changing the code.
+
 ## Prime directive: performance, optimization, minimal resource use — at the current animation fidelity
 
 This package is a hand-tuned, macOS System Settings–style window. Every change is held to one bar: **maximum runtime performance, lowest CPU/GPU/memory cost, while preserving the exact motion that exists today.** The animations (subtitle expand/collapse, two-phase "Show Details" toggle, tab crossfade, search-jump highlight flash, scroll compensation) are a deliberate 1:1 port of the BetterAudio preferences window — treat their timing curves, durations, and visual result as a fixed contract. Optimize *around* them; do not flatten, simplify, or "clean up" the motion to gain speed.
@@ -14,7 +18,7 @@ Practical consequences when editing:
 ```bash
 swift build                      # build library + demo
 swift run better-settings-demo   # launch the 3-tab demo window (manual smoke test)
-swift test                       # run the unit tests (search index only)
+swift test                       # 17 XCTest cases, domain logic only
 
 # single test:
 swift test --filter BetterSettingsTests.SettingsSearchIndexTests/testKeywordMatch
@@ -22,7 +26,7 @@ swift test --filter BetterSettingsTests.SettingsSearchIndexTests/testKeywordMatc
 
 Requires macOS 13+. Builds under Swift 6 language mode with strict concurrency on all three targets (see `Package.swift`). There is no SwiftUI, no XIB/Storyboard — everything is programmatic AppKit.
 
-Only the `Domain/` search logic is unit-tested; all UI/animation behavior is verified by running the demo.
+Unit tests cover `SettingsSearchIndex`, `SettingsRouter` history, sidebar group rows and row subtitle measurement (`Tests/BetterSettingsTests`). All animation and window behavior is verified by running the demo.
 
 ## Architecture
 

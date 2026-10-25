@@ -7,8 +7,22 @@ search with scroll-to-and-flash navigation**.
 
 Modeled on the BetterAudio preferences window (the reference for the search +
 section-jump UX), generalized so any app drives it from a small declaration.
+Used by [BetterAudio](https://github.com/rokartur/BetterAudio),
+[BetterCmdTab](https://github.com/rokartur/BetterCmdTab) and the other
+`Better*` apps.
 
-Requires macOS 13+. Picks up Liquid Glass automatically on macOS 26+.
+Requires macOS 13+. Picks up Liquid Glass automatically on macOS 26+. No
+dependencies, no SwiftUI, no XIBs: programmatic AppKit under Swift 6 strict
+concurrency.
+
+## Install
+
+Swift Package Manager. In Xcode: **File ▸ Add Package Dependencies…** and
+enter the repo URL, or in `Package.swift`:
+
+```swift
+.package(url: "https://github.com/rokartur/BetterSettings.git", from: "0.5.4")
+```
 
 ## What you get
 
@@ -112,3 +126,20 @@ swift run better-settings-demo
 
 Opens a three-tab settings window (General / Appearance / About) wired exactly as
 above. Doubles as a compile-time contract for the public API.
+
+## Development
+
+```bash
+swift build
+swift test
+swift test --filter SettingsSearchIndexTests
+```
+
+Unit tests cover the domain logic (search index, router history, sidebar
+grouping, row subtitles). Animation and window behavior are checked by running
+the demo. Conventions, architecture notes and the release process are in
+[AGENTS.md](AGENTS.md).
+
+## License
+
+MIT, see [LICENSE](LICENSE).
