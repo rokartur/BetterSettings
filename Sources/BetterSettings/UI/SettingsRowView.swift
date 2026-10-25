@@ -215,7 +215,21 @@ public final class SettingsRowView: NSView {
             hStack.addArrangedSubview(iconView)
         }
 
-        hStack.addArrangedSubview(textColumn)
+        // Spans the row's height so the text column can center on a taller accessory while
+        // collapsed; a growing subtitle pushes the column to the top without moving the accessory.
+        let textArea = NSView()
+        textArea.translatesAutoresizingMaskIntoConstraints = false
+        textArea.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        textArea.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textArea.addSubview(textColumn)
+        hStack.addArrangedSubview(textArea)
+        NSLayoutConstraint.activate([
+            textColumn.leadingAnchor.constraint(equalTo: textArea.leadingAnchor),
+            textColumn.trailingAnchor.constraint(equalTo: textArea.trailingAnchor),
+            textColumn.centerYAnchor.constraint(equalTo: textArea.centerYAnchor),
+            textColumn.topAnchor.constraint(greaterThanOrEqualTo: textArea.topAnchor),
+            textArea.bottomAnchor.constraint(equalTo: hStack.bottomAnchor),
+        ])
 
         updateAccessory(accessory)
 

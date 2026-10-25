@@ -120,6 +120,61 @@ final class SettingsRowSubtitleTests: XCTestCase {
         XCTAssertEqual(host.layoutCount, 0, "an unchanged subtitle forced a page layout")
     }
 
+    func testCollapsedTitleCentersOnTheAccessoryAndExpandedTitleTopAligns() async throws {
+        let suiteName = "SettingsRowSubtitleTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let originalDefaults = SettingsDetails.defaults
+        SettingsDetails.defaults = defaults
+        defer {
+            SettingsDetails.defaults = originalDefaults
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        for isOn in [false, true] {
+            SettingsDetails.write(isOn)
+            let accessory = NSSwitch()
+            let row = SettingsRowView(title: "Show BetterAudio HUDs",
+                                      subtitle: "Show a HUD when the volume changes",
+                                      accessory: accessory)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 200),
+                                  styleMask: [.titled], backing: .buffered, defer: true)
+            let host = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 200))
+            window.contentView = host
+            host.addSubview(row)
+            NSLayoutConstraint.activate([
+                row.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+                row.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+                row.topAnchor.constraint(equalTo: host.topAnchor),
+            ])
+            for _ in 0..<8 {
+                host.layoutSubtreeIfNeeded()
+                await Task.yield()
+            }
+
+            let title = try XCTUnwrap(titleLabel(in: row))
+            let titleFrame = title.convert(title.bounds, to: row)
+            let accessoryFrame = accessory.convert(accessory.bounds, to: row)
+            XCTAssertEqual(accessoryFrame.maxY, row.bounds.maxY, accuracy: 1, "the accessory left the top")
+            if isOn {
+                XCTAssertEqual(titleFrame.maxY, row.bounds.maxY, accuracy: 1, "expanded title left the top")
+            } else {
+                XCTAssertEqual(titleFrame.midY, accessoryFrame.midY, accuracy: 1, "collapsed title is not centered")
+            }
+        }
+    }
+
+    private func titleLabel(in row: SettingsRowView) -> NSTextField? {
+        var fields: [NSTextField] = []
+        func walk(_ view: NSView) {
+            for subview in view.subviews {
+                if let field = subview as? NSTextField { fields.append(field) }
+                walk(subview)
+            }
+        }
+        walk(row)
+        return fields.max { ($0.font?.pointSize ?? 0) < ($1.font?.pointSize ?? 0) }
+    }
+
     /// The subtitle is the smaller of the row's two labels.
     private func subtitleLabel(in row: SettingsRowView) -> NSTextField? {
         var fields: [NSTextField] = []
