@@ -1,120 +1,52 @@
 # BetterSettings, agent guide
 
-Swift package: a macOS System Settings-style window in programmatic AppKit. `README.md` has the public API and usage; this file has the rules for changing the code.
+`README.md` carries the public API, install, layout and commands. This file carries what the code does not confess.
 
-## Prime directive: performance, optimization, minimal resource use — at the current animation fidelity
+## Prime directive: fidelity
 
-This package is a hand-tuned, macOS System Settings–style window. Every change is held to one bar: **maximum runtime performance, lowest CPU/GPU/memory cost, while preserving the exact motion that exists today.** The animations (subtitle expand/collapse, two-phase "Show Details" toggle, tab crossfade, search-jump highlight flash, scroll compensation) are a deliberate 1:1 port of the BetterAudio preferences window — treat their timing curves, durations, and visual result as a fixed contract. Optimize *around* them; do not flatten, simplify, or "clean up" the motion to gain speed.
+Every change is held to one bar: lowest CPU/GPU/memory cost at the exact motion that exists today. The animations (subtitle expand/collapse, "Show Details" toggle, tab crossfade, search-jump highlight flash, scroll compensation) are a 1:1 port of the BetterAudio preferences window; their timing curves, durations and visual result are a fixed contract. Optimize around them: fewer layout passes, allocations and redraws. An optimization that changes perceived motion is wrong.
 
-Practical consequences when editing:
-- Never regress the animation feel to save cycles. If an optimization changes perceived motion, it's wrong.
-- Prefer reducing layout passes, allocations, and redraws over reducing animation richness. Cache measurements (see `measuredSubtitleHeight`), reuse layers, batch `layoutSubtreeIfNeeded` calls under deduplicated roots (see `prepareActiveTabLayoutForAnimation`).
-- Keep the dependency-free, AppKit-only footprint. No new packages.
-- Honor `NSWorkspace.shared.accessibilityDisplayShouldReduceMotion` everywhere an animation is started — reduced-motion paths must skip straight to the final state, not animate faster.
-- Memory is reclaimed aggressively on window close (`SettingsPresenter.releaseOnClose` → `tearDownAndReleaseWindow` → per-controller `prepareForMemoryRelease`). Any new retained state (layers, images, observers, tasks) must be torn down on those paths.
+Animation and window behavior are verified by running `swift run better-settings-demo`; unit tests cover the `Domain/` logic and row measurement only.
 
-## Commands
+## Why the code is shaped this way
 
-```bash
-swift build                      # build library + demo
-swift run better-settings-demo   # launch the 3-tab demo window (manual smoke test)
-swift test                       # 17 XCTest cases, domain logic only
-
-# single test:
-swift test --filter BetterSettingsTests.SettingsSearchIndexTests/testKeywordMatch
-```
-
-Requires macOS 13+. Builds under Swift 6 language mode with strict concurrency on all three targets (see `Package.swift`). There is no SwiftUI, no XIB/Storyboard — everything is programmatic AppKit.
-
-Unit tests cover `SettingsSearchIndex`, `SettingsRouter` history, sidebar group rows and row subtitle measurement (`Tests/BetterSettingsTests`). All animation and window behavior is verified by running the demo.
-
-## Architecture
-
-Two layers. **`Domain/`** is dependency-free, `Sendable`, and pure value/observable logic. **`UI/`** is AppKit, `@MainActor`, and builds the window.
-
-### Data flow (single source of truth = `SettingsRouter`)
-`SettingsRouter` (Combine `ObservableObject`) holds `selectedTabID` plus a one-shot `navigationRequest`. Everything else observes it; nothing reaches across controllers directly:
-- `SettingsSplitViewController` observes `selectedTabID` → tells content VC to swap tabs + updates the window title.
-- `SettingsSidebarViewController` observes `selectedTabID` → syncs the table selection.
-- `SettingsContentViewController` observes `navigationRequest` → switches tab if needed, then dispatches the scroll-to + highlight to the active tab.
-
-`navigationRequest` carries a `requestID` (UUID) so re-selecting the same target still fires *and* is handled exactly once (`lastHandledRequestID` guard). This is why search-jumping to a control already on screen still flashes it.
-
-### Window lifecycle
-`SettingsPresenter` is the recommended entry point: lazy create, bring-to-front activation (with an accessory-app activation retry on the next runloop tick), and `releaseOnClose` teardown that frees the whole controller tree to reclaim RAM, rebuilding on the next `show()`. `SettingsWindowController` is the lower-level alternative if the adopter wants to own create/teardown/reopen themselves.
-
-`SettingsWindow` is fixed-size (`contentMinSize == contentMaxSize == windowSize`, locked *after* assigning the content VC so split-view constraints can't fight it) with a unified toolbar so it picks up Liquid Glass on macOS 26+. `canBecomeKey`/`canBecomeMain` are `nonisolated` overrides — AppKit's accessibility subsystem queries them off the main thread, and a `@MainActor` override would trap under Swift 6's executor check.
-
-`SettingsContentViewController` builds each tab lazily and caches the controllers. By default (`tabUnloadPolicy == .keepAll`) every visited tab stays live until window close — smoothness-first, zero unload bookkeeping (the whole unload path sits behind one `unloadsTabs` guard). A non-`.keepAll` policy reclaims RAM by evicting inactive tabs (LRU keep-N, plus an optional drop-to-active-only when the window resigns key) and rebuilding them from `contentProvider` on revisit. This is motion-safe and search-safe: eviction is deferred one runloop turn off the crossfade frame, never tears down an on-screen view (`view.superview === containerView` guard), and the search catalog/show-details state live outside the tab controller so a rebuilt tab is identical. Cost is a rebuild (`setupContent()` + one subtitle-height re-measure) on revisit.
-
-### Tab content (the adopter-facing base class)
-Subclass `SettingsTabViewController`, override `setupContent()`, and build with `addSection(title:anchor:)` / `addRow(...searchItemID:)` / `addDivider`. Registering an `anchor` and `searchItemID` is all that's needed for search-jump navigation — the base class resolves a request to the target view, scrolls it into view, and flashes a `SearchHighlightOverlayView`. No per-tab navigation code.
-
-### The "Show Details" toggle animation
-One smooth, vsync-locked spring expands/collapses every visible row's subtitle together. The sidebar toggle (`detailsToggleChanged`) just persists state (`SettingsDetails.write`) and posts `betterSettingsShowDetailsDidChange` with `["isOn": Bool]` — there is **no coordinator and no multi-phase post**. Each `SettingsRowView` observes that notification and, when it should animate (in a window, not reduce-motion, not the initial sync), hands a track (its subtitle height constraint + label) to the singleton `SettingsDetailsSpringAnimator`.
-
-`SettingsDetailsSpringAnimator` is the whole engine: it coalesces all rows that register on the same run-loop turn under **one `CADisplayLink`** (60 Hz `Timer` below macOS 14). Each row integrates its **own** semi-implicit-Euler spring whose `response` scales with how far that row travels — a 1-line subtitle snaps, a tall multi-line one glides (short rows looked floaty on a fixed duration) — with per-direction damping (expand under-damped → overshoots the open height; collapse more damped → a smooth close, since its past-0 overshoot is clamped and can't bounce visibly). All rows start on the same tick — expand and collapse both move as one motion, with no top-to-bottom cascade. In one pass per tick it advances every track's height + opacity, lays out each affected root once, and re-pins a captured **scroll anchor** so content above the fold changing height doesn't drift the viewport. Each row finishes (snaps to rest) as its own spring settles. Tuning constants — `response{Expand,Collapse}{Short,Long}`, `damping{Expand,Collapse}`, `referenceTravel` — live at the top of the file. `cancel(_:)` drops a row's track when it takes over its own state (e.g. its subtitle text changed).
-
-`SettingsRowView` owns the per-row half: it caches its expanded subtitle height (invalidate on text/width change), tracks the in-flight direction (`animatingTowardVisible`) so a redundant same-direction toggle is ignored, and applies the immediate (un-animated) snap for offscreen tabs and reduce-motion (skipping the layout flush when `window == nil`).
-
-### Search
-`SettingsSearchIndex` (in `Domain/`, pure + tested) pre-normalizes every catalog field once at init (case/diacritic/width folding) into a `SearchDocument`, then scores per query token with AND semantics: title > keyword > tab, word-prefix > substring, plus a whole-query phrase bonus. Catalog order is authoritative and breaks score ties (stable sort). The sidebar debounces input (`searchDebounce` 0.18s) before re-querying and swapping the table between tab rows and result rows.
-
-### Sidebar rendering
-`SidebarCellView` is a reused `NSTableCellView` that reconfigures between tab and search-result layouts by toggling pre-built constraints (no view rebuilds). Gradient icon badges use a single cached `CAGradientLayer` per cell with a precomputed `shadowPath`. Selection emphasis (active vs inactive window) is refreshed only for *visible* rows (`refreshVisibleRowStyles` over `rows(in: visibleRect)`), not the whole table.
+- `SettingsRouter` is the single source of truth: `selectedTabID` plus a one-shot `navigationRequest`. Controllers observe it; none reaches across to another. `navigationRequest.requestID` (UUID) is why re-selecting the same target still fires and `lastHandledRequestID` is why it fires once: that is what makes search-jumping to an on-screen control still flash it.
+- `SettingsWindow.canBecomeKey` / `canBecomeMain` are `nonisolated` overrides: AppKit accessibility queries them off the main thread and a `@MainActor` override traps under the Swift 6 executor check. The window size is locked after the content VC is assigned so split-view constraints cannot fight it.
+- `SettingsPresenter.releaseOnClose` frees the whole controller tree (`tearDownAndReleaseWindow` → per-controller `prepareForMemoryRelease`) and rebuilds on the next `show()`. The accessory-app activation retries on the next runloop tick.
+- Tab eviction (`tabUnloadPolicy` other than `.keepAll`) is deferred one runloop turn off the crossfade frame and skipped for the on-screen view (`view.superview === containerView`); the search catalog and show-details state live outside the tab controller so a rebuilt tab is identical.
+- "Show Details" has one coordinator-free path: the sidebar toggle persists via `SettingsDetails.write` and posts `betterSettingsShowDetailsDidChange`; each `SettingsRowView` hands its track to the singleton `SettingsDetailsSpringAnimator`, which drives every row under one `CADisplayLink` (60 Hz `Timer` below macOS 14). Each row's spring `response` scales with its travel because short rows looked floaty on a fixed duration; collapse is damped harder because its past-0 overshoot is clamped. A captured scroll anchor is re-pinned every tick so height changes above the fold do not drift the viewport. Tuning constants sit at the top of that file.
+- `SettingsRowView` caches its expanded subtitle height (invalidated on text or width change) and ignores a redundant same-direction toggle via `animatingTowardVisible`.
+- `SettingsSearchIndex` normalizes the catalog once at init; catalog order breaks score ties, so the stable sort stays. The sidebar debounces input by `searchDebounce` (0.18 s).
+- `SidebarCellView` toggles pre-built constraints between tab and result layouts and caches one `CAGradientLayer` per cell; selection emphasis refreshes visible rows only (`refreshVisibleRowStyles`).
 
 ## Conventions
 
-- **Strict concurrency:** Swift 6 mode is on. UI types are `@MainActor`; domain types are `Sendable`. Cross-thread AppKit getters that must stay off-main are `nonisolated` and return constants only.
-- **Cancellation via generation counters + `Task` handles:** in-flight animations and async layout resolution are guarded by a monotonically-bumped generation and/or a stored `Task` that's cancelled before starting the next. Match this pattern for any new async/animated work — never let a stale completion mutate current state.
-- **Reduce-motion is a required branch, not an afterthought.** Every animated path has a settled-state fast path.
-- **Teardown is mandatory.** Observers, `Task`s, Combine subscriptions, table delegates, and document views are all explicitly nilled in the various `tearDown()` / `prepareForMemoryRelease()` methods. New retained state goes there too.
-- **Strings arrive pre-localized** from the host app via `SettingsConfiguration`; this package does no localization.
+- Swift 6 strict concurrency: UI types are `@MainActor`, domain types `Sendable`. An AppKit getter that must answer off-main is `nonisolated` and returns a constant.
+- Async or animated work is guarded by a bumped generation counter or a stored `Task` cancelled before the next starts, so a stale completion finds nothing to mutate.
+- Every animated path honors `NSWorkspace.shared.accessibilityDisplayShouldReduceMotion` with a settled-state branch that jumps to the final state.
+- Retained state (observers, `Task`s, Combine subscriptions, table delegates, document views, layers, images) is nilled in `tearDown()` / `prepareForMemoryRelease()`; new state joins that list.
+- Strings arrive pre-localized from the host via `SettingsConfiguration`; the package holds no localization.
+- Dependency-free, AppKit-only footprint.
 
 ## Releases & changelogs
 
-This is the **canonical reference** for the `Better*` release process. Releases are cut **manually**
-with the `gh` CLI — there is no CI release workflow and no `CHANGELOG.md` file in the repo. The
-changelog *is* the GitHub Release body.
+Canonical reference for the `Better*` release process. Releases are cut manually with `gh`; the changelog is the GitHub Release body, there is no `CHANGELOG.md`.
 
 ### Versioning
-SemVer `MAJOR.MINOR.PATCH`. Tags are the bare version with no prefix (e.g. `0.2.8`); the release
-title is the same bare version.
-- `MAJOR` — source-breaking API change.
-- `MINOR` — new backward-compatible API or feature.
-- `PATCH` — bug fix, performance, or internal change with no API change.
+SemVer `MAJOR.MINOR.PATCH`. Tag and release title are the bare version (`0.5.4`); BetterShortcuts alone uses a `v` prefix.
+- `MAJOR`: source-breaking API change.
+- `MINOR`: new backward-compatible API or feature.
+- `PATCH`: bug fix, performance or internal change with no API change.
 
 ### Cutting a release
-1. Land all changes on `main`; one tag = one coherent unit of work.
-2. Tag and push:
-   ```bash
-   git tag <version> && git push origin <version>
-   ```
-3. Publish the release with the changelog as its body:
-   ```bash
-   gh release create <version> -R rokartur/BetterSettings --title "<version>" --notes-file notes.md --verify-tag
-   ```
-   Add `--prerelease` for any prerelease (`-beta.N`) tag.
+1. Land all changes on `main`; one tag is one coherent unit of work.
+2. `git tag <version> && git push origin <version>`
+3. `gh release create <version> -R rokartur/<repo> --title "<version>" --notes-file notes.md --verify-tag`, plus `--prerelease` for a `-beta.N` tag.
 
 ### Changelog format (the release body)
-Concrete and technical, never generic filler:
+- First line `## <headline>`: one specific sentence on what the release delivers, optionally one line of context after it.
+- Only the sections that apply: `### Added`, `### Changed`, `### Fixed`, `### Performance` (state whether perceived motion is unchanged), `### Removed`.
+- Every bullet names the real symbols that changed in backticks and states the behavior, derived from the diff. A one-fix release is the headline plus one bullet.
+- A release with a predecessor ends with a compare footer after a blank line: `**Full changelog:** https://github.com/rokartur/<repo>/compare/<prev>...<version>`
 
-- **First line** is `## <headline>` — one specific sentence on what the release delivers.
-- Optionally one line of prose context after it.
-- Group entries under only the sections that apply (omit the rest):
-  - `### Added` — new public API / features
-  - `### Changed` — behavior or API changes
-  - `### Fixed` — bug fixes
-  - `### Performance` — speed / memory wins (say if perceived motion is unchanged)
-  - `### Removed` — deleted API
-- Every bullet names the **real symbols** that changed in `backticks` (types, methods, flags) and
-  states the behavior — derived from the actual diff, never invented. A one-fix release can be the
-  headline plus a single bullet; don't pad.
-- End any release that has a predecessor with a compare footer (blank line before it):
-  ```
-  **Full changelog:** https://github.com/rokartur/BetterSettings/compare/<prev>...<version>
-  ```
-  The first release in a series omits the footer.
-
-Regenerate a body from history with `git log --no-merges <prev>..<version>` and
-`git diff --stat <prev>..<version>`, then write it in the format above.
+Regenerate a body from `git log --no-merges <prev>..<version>` and `git diff --stat <prev>..<version>`.
