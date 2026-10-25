@@ -228,9 +228,9 @@ final class SidebarCellView: NSTableCellView {
         }
 
         if isEmphasized {
-            let selected = NSColor.alternateSelectedControlTextColor
-            titleField.textColor = selected
-            subtitleField.textColor = selected.withAlphaComponent(0.84)
+            // Emphasized rows already draw labels as selected text; a hand-set selected color on top breaks that.
+            titleField.textColor = baseTitleColor
+            subtitleField.textColor = baseSubtitleColor
         } else {
             titleField.textColor = baseTitleColor.applyingInactiveSelectedFactor()
             subtitleField.textColor = baseSubtitleColor.applyingInactiveSelectedFactor()
